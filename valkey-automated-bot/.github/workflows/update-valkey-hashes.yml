@@ -1,0 +1,78 @@
+name: Commit new hash into valkey-hashes
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version of Valkey to create.
+        type: string
+        required: true
+    secrets:
+      PAT_TOKEN:
+        description: PAT token for valkey-hashes repo.
+        required: true
+
+jobs:
+  commit-hash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+|unstable)$ ]]; then
+            echo "Invalid version format '${{ inputs.version }}'. Expected format: x.y.z or 'unstable'."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: valkey-io/valkey-hashes
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Ensure repository is initialized
+        run: |
+          if [ ! -d ".git" ]; then
+            echo "Error: Not a git repository."
+            exit 1
+          fi
+          if [ ! -f README ]; then
+            echo "README file not found. Creating a new README file."
+            touch README
+          fi
+
+      - name: Update hash
+        run: |
+          set -e
+          VERSION=${{ inputs.version }}
+          URL="https://github.com/valkey-io/valkey/archive/refs/tags/${VERSION}.tar.gz"
+          FILENAME="valkey-${VERSION}.tar.gz"
+          
+          # Download the tar.gz file
+          wget -O "$FILENAME" "$URL" || { echo "Failed to download $URL"; exit 1; }
+          
+          # Calculate SHA256 hash
+          HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
+          
+          # Add hash to README if not already present
+          if grep -q "unstable" README; then
+            # Replace existing line with new hash
+            sed -i "/.*unstable/c\hash $FILENAME sha256 $HASH $URL" README
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add README
+            git commit -m "Update hash for version ${{ inputs.version }}"
+            git push origin HEAD
+          elif ! grep -q "$HASH $URL" README; then
+            echo "hash $FILENAME sha256 $HASH $URL" >> README
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add README
+            git commit -m "Update hash for ${{ inputs.version }}"
+            git push origin HEAD
+          else
+            echo "Hash entry already exists in README. Skipping append."
+          fi
+          
+          # Clean up the downloaded file
+          rm "$FILENAME"
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
