@@ -36,7 +36,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          repository: Autxmaton/valkey-container
+          repository: valkey-io/valkey-container
           token: ${{ secrets.PAT_TOKEN }}
       
       - name: Strip patch version
