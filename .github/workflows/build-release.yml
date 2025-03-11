@@ -38,6 +38,9 @@ jobs:
           if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
             VERSION=${{ github.event.client_payload.version }}
             ENVIRONMENT=${{ github.event.client_payload.environment }}
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="unstable"
+            ENVIRONMENT="dev"
           else
             VERSION=${{ github.event.inputs.version }}
             ENVIRONMENT=${{ github.event.inputs.environment }}
@@ -64,21 +67,10 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
-      - name: Check if we are testing
-        id: check-if-testing
-        run: |
-          if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "This is a test workflow -> We will upload to the Test S3 Bucket"
-            echo "IS_TEST=true" >> $GITHUB_OUTPUT
-          else
-            echo "This is a Release workflow -> We will upload to the Release S3 Bucket"
-            echo "IS_TEST=false" >> $GITHUB_OUTPUT
-          fi
-        shell: bash
-
   update-valkey-hashes:
     needs:
       - process-inputs
+    if: needs.process-inputs.outputs.environment != 'prod'
     uses: ./.github/workflows/update-valkey-hashes.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -89,6 +81,7 @@ jobs:
     needs:
       - process-inputs
       - update-valkey-hashes
+    if: needs.process-inputs.outputs.environment != 'prod'
     uses: ./.github/workflows/update-docker.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
