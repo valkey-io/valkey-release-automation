@@ -70,7 +70,7 @@ jobs:
   update-valkey-hashes:
     needs:
       - process-inputs
-    if: needs.process-inputs.outputs.environment != 'prod'
+    if: needs.process-inputs.outputs.environment == 'prod'
     uses: ./.github/workflows/update-valkey-hashes.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -81,7 +81,7 @@ jobs:
     needs:
       - process-inputs
       - update-valkey-hashes
-    if: needs.process-inputs.outputs.environment != 'prod'
+    if: needs.process-inputs.outputs.environment == 'prod'
     uses: ./.github/workflows/update-docker.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
