@@ -1,5 +1,5 @@
 # Overview
-This bot will automate post-release processes for each new release of Valkey. The tasks automated include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, updating the valkey-container and uploading the docker image, and finally updating the valkey.io website downloads page with the new releases. This bot will be triggered whenever a new release is published.
+This bot will automate all the post-release processes that currently occur for each new release of Valkey. The tasks automated include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, updating the valkey-container and uploading the docker image, and finally updating the valkey.io website with the new releases. This bot will be triggered whenever a new release is published.
 
 Here is a diagram that depicts the automated release process: <br>
 ![alt text](Diagram.png)
@@ -18,7 +18,7 @@ Create a Personal Access Token (PAT) with the following permissions:
 - **Actions:** Read and Write (To trigger and interact with github actions)
 - **Contents:** Read and Write (To access repository contents and modify them)
 - **Metadata:** Read-only (To access repository metadata)
-- **Workflows:** Read and Write (To trigger workflows in the automated bot repository)
+- **Workflows:** Read and Write (To trigger workflows in the automated bot repository) <br>
 Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 
 ## 2. Set up the S3 Buckets and add Tokens on GitHub Secrets
@@ -43,7 +43,8 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 - Choose the OIDC provider that we created.
  - Set the audience to `sts.amazonaws.com`.
 - Edit the trust policy with:
-    ```{
+    ```
+    {
         "Version": "2012-10-17",
         "Statement": [
             {
@@ -63,7 +64,8 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
                 }
             }
         ]
-        }```
+    }
+    ```
 **Note:** Remember to replace `<aws_account_id>` with your actual aws account id.
 ### c. Create a secret named `AWS_ROLE_TO_ASSUME`
 - The secret value for this token is the arn of the IAM role that you just created.
