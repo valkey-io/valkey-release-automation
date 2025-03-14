@@ -9,7 +9,7 @@ The workflow `trigger-build-release.yml` in the valkey-io/valkey repository will
 ![alt text](Workflow.png) <br>
 We now have a unified workflow that will handle all the steps in the release process.
 
-# Authentication Setup for Valkey Post-Release Automation Bot
+# Authentication Setup
 
 This guide describes the steps to set up authentication tokens required for the post-release tasks in Valkey.
 
