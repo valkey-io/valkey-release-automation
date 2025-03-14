@@ -1,13 +1,12 @@
 # Overview
-This bot will automate all the post-release processes that currently occur for each new release of Valkey. The tasks automated include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, updating the valkey-container and uploading the docker image, and finally updating the valkey.io website with the new releases. This bot will be triggered whenever a new release is published.
+This repository automates all the post-release processes for a new Valkey version release. The tasks undertaken by the this bot include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, opening a PR on the valkey-container, and finally updating the valkey.io website with a download page for a new version.
 
 Here is a diagram that depicts the automated release process: <br>
 ![alt text](Diagram.png)
 
 # Workflow
-The workflow `trigger-build-release.yml` in the valkey-io/valkey repository will trigger this automation bot whenever a new release is published. The workflow will send the version and the environment as the payload. Additionally, the workflow will require a Personal Access Token which we will describe how to set up below. Once the workflow is triggered, this bot will process the payload and run the following: <br>
+This automation is triggered upon the publication of a new release in the [Valkey repository](https://github.com/valkey-io/valkey). The `trigger-build-release.yml` workflow in the [Valkey repository](https://github.com/valkey-io/valkey) initiates the process by dispatching a payload containing the release `version` and target `environment`. Execution of this workflow requires a Personal Access Token (PAT), the configuration of which is outlined below. Upon invocation, the bot processes the payload and proceeds with the following operations: <br>
 ![alt text](Workflow.png) <br>
-We now have a unified workflow that will handle all the steps in the release process.
 
 # Authentication Setup
 
