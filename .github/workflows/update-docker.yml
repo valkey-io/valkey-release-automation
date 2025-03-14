@@ -1,0 +1,80 @@
+name: Trigger Automation for Docker update
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        description: "Version of the package to build"
+        required: true
+      branch:
+        type: string
+        description: "Branch to build"
+        required: false
+    secrets:
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  build-new-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+|unstable)$ ]]; then
+            echo "Invalid version format. Expected format: x.y.z or 'unstable'"
+            exit 1
+          fi
+      
+      - name: Set up bashbrew
+        uses: docker-library/bashbrew@v0.1.12
+      
+      - name: Check if bashbrew in installed
+        run: |
+          bashbrew --version
+
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository_owner }}/valkey-container
+          token: ${{ secrets.PAT_TOKEN }}
+      
+      - name: Strip patch version
+        id: strip_version
+        run: |
+          if [[ "${{ inputs.version }}" == "unstable" ]]; then
+            echo "Version is unstable"
+            echo "stripped_version=unstable" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+            stripped_version="${BASH_REMATCH[1]}"
+            echo "Stripped version: $stripped_version"
+            echo "stripped_version=$stripped_version" >> $GITHUB_OUTPUT
+          else
+            echo "Version doesn't match expected format"
+            exit 1
+          fi
+        shell: bash
+      
+      - name: Update new version
+        run: |
+          if [ -d "${{ steps.strip_version.outputs.stripped_version }}" ]; then
+            ./update.sh ${{ inputs.branch }}
+          else
+            mkdir ${{ steps.strip_version.outputs.stripped_version }}
+            ./update.sh ${{ inputs.branch }}
+          fi
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          branch: update-${{ inputs.version }}
+          commit-message: "Update to version ${{ inputs.version }}"
+          committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          delete-branch: true
+          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+          title: "Update to version ${{ inputs.version }}"
+          body: |
+            This pull request updates the repository to version `${{ inputs.version }}`.
+            Please review the changes and merge when appropriate.
+          

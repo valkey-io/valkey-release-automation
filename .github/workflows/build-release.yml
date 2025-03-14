@@ -1,0 +1,132 @@
+name: Build Release new version
+
+on:
+  repository_dispatch:
+    types: [build-release]
+  push:
+    paths:
+      - '.github/workflows/build-release.yml'
+      - '.github/workflows/call-build-linux-arm-packages.yml'
+      - '.github/workflows/call-build-linux-x86-packages.yml'
+      - '.github/actions/generate-package-build-matrix/*'
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        description: "Version of the package to build"
+        required: true
+      environment:
+        type: string
+        description: "Environment to build"
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  process-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.process-inputs.outputs.version }}
+      environment: ${{ steps.process-inputs.outputs.environment }}
+    steps:
+      - name: Process and validate inputs
+        id: process-inputs
+        run: |
+          # Determine the event type
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            VERSION=${{ github.event.client_payload.version }}
+            ENVIRONMENT=${{ github.event.client_payload.environment }}
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="unstable"
+            ENVIRONMENT="dev"
+          else
+            VERSION=${{ github.event.inputs.version }}
+            ENVIRONMENT=${{ github.event.inputs.environment }}
+          fi
+
+          # Validate version
+          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+|unstable)$ ]]; then
+            echo "Invalid version format. Expected format: x.y.z or 'unstable'."
+            exit 1
+          fi
+
+          # Default environment to 'prod' if not provided
+          if [[ -z "$ENVIRONMENT" ]]; then
+            ENVIRONMENT="prod"
+          fi
+
+          # Validate environment
+          if [[ "$ENVIRONMENT" != "dev" && "$ENVIRONMENT" != "prod" ]]; then
+            echo "Invalid environment. Allowed values: 'dev', 'prod'."
+            exit 1
+          fi
+
+          # Output validated variables
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+  update-valkey-hashes:
+    needs:
+      - process-inputs
+    if: needs.process-inputs.outputs.environment == 'prod'
+    uses: ./.github/workflows/update-valkey-hashes.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+    secrets:
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+  update-docker:
+    needs:
+      - process-inputs
+      - update-valkey-hashes
+    if: needs.process-inputs.outputs.environment == 'prod'
+    uses: ./.github/workflows/update-docker.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+    secrets:
+      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+  
+  generate-build-matrix:
+    needs:
+      - process-inputs
+    name: Generating build matrix
+    runs-on: ubuntu-latest
+    outputs:
+      x86_64-build-matrix: ${{ steps.set-matrix.outputs.x86_64-build-matrix }}
+      arm64-build-matrix: ${{ steps.set-matrix.outputs.arm64-build-matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - uses: ./.github/actions/generate-package-build-matrix
+        id: set-matrix
+        with:
+          ref: ${{ needs.process-inputs.outputs.version }}
+  
+  release-build-linux-x86-packages:
+    needs:
+      - generate-build-matrix
+      - process-inputs
+    uses: ./.github/workflows/call-build-linux-x86-packages.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+      build_matrix: ${{ needs.generate-build-matrix.outputs.x86_64-build-matrix }}
+      region: us-west-2
+    secrets:
+      bucket_name: ${{ needs.process-inputs.outputs.environment == 'dev' && secrets.AWS_TEST_BUCKET || secrets.AWS_S3_BUCKET }}
+      role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
+  release-build-linux-arm-packages:
+    needs:
+      - generate-build-matrix
+      - process-inputs
+    uses: ./.github/workflows/call-build-linux-arm-packages.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+      build_matrix: ${{ needs.generate-build-matrix.outputs.arm64-build-matrix }}
+      region: us-west-2
+    secrets:
+      bucket_name: ${{ needs.process-inputs.outputs.environment == 'dev' && secrets.AWS_TEST_BUCKET || secrets.AWS_S3_BUCKET }}
+      role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
