@@ -75,7 +75,7 @@ jobs:
     with:
       version: ${{ needs.process-inputs.outputs.version }}
     secrets:
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
 
   update-docker:
     needs:
@@ -86,7 +86,7 @@ jobs:
     with:
       version: ${{ needs.process-inputs.outputs.version }}
     secrets:
-      PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
   
   generate-build-matrix:
     needs:
