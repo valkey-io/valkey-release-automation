@@ -16,9 +16,12 @@ on:
         description: "Version of the package to build"
         required: true
       environment:
-        type: string
-        description: "Environment to build"
-        required: false
+        description: Environment to build
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
 
 permissions:
   id-token: write
