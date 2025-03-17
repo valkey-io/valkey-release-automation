@@ -2,11 +2,11 @@
 This repository automates all the post-release processes for a new Valkey version release. The tasks undertaken by the this bot include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, opening a PR on the valkey-container, and finally updating the valkey.io website with a download page for a new version.
 
 Here is a diagram that depicts the automated release process: <br>
-![alt text](Diagram.png)
+![alt text](documents/Diagram.png)
 
 # Workflow
 This automation is triggered upon the publication of a new release in the [Valkey repository](https://github.com/valkey-io/valkey). The `trigger-build-release.yml` workflow in the [Valkey repository](https://github.com/valkey-io/valkey) initiates the process by dispatching a payload containing the release `version` and target `environment`. Execution of this workflow requires a Personal Access Token (PAT), the configuration of which is outlined below. Upon invocation, the bot processes the payload and proceeds with the following operations: <br>
-![alt text](Workflow.png) <br>
+![alt text](documents/Workflow.png) <br>
 
 # Authentication Setup
 
