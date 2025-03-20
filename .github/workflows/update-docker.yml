@@ -61,11 +61,6 @@ jobs:
 
             # Run update script
             ./update.sh ${{ steps.strip_version.outputs.stripped_version }}
-  
-      - name: Ensure Up-to-Date Branch
-        run: |
-          git checkout main
-          git pull origin main --rebase
 
       - name: Check for Changes
         run: |
