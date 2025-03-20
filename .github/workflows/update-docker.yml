@@ -73,8 +73,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          branch: update-${{ inputs.version }} | tr '.' '-'
-          commit-message: "Update to version ${{ inputs.version }}"
+          branch: update-${{ inputs.version }}
+          commit-message: "Update for version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           delete-branch: true
           signoff: true
