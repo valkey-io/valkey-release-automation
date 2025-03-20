@@ -50,14 +50,14 @@ jobs:
           fi
 
           # Validate version
-          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+|unstable)$ ]]; then
-            echo "Invalid version format. Expected format: x.y.z or 'unstable'."
+          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+            echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
             exit 1
           fi
 
-          # Default environment to 'prod' if not provided
+          # Default environment to 'dev' if not provided for safety. Environment is made non-optional.
           if [[ -z "$ENVIRONMENT" ]]; then
-            ENVIRONMENT="prod"
+            ENVIRONMENT="dev"
           fi
 
           # Validate environment
