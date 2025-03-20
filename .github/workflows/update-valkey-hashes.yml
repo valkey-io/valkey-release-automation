@@ -53,15 +53,7 @@ jobs:
           HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
           
           # Add hash to README if not already present
-          if grep -q "unstable" README; then
-            # Replace existing line with new hash
-            sed -i "/.*unstable/c\hash $FILENAME sha256 $HASH $URL" README
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add README
-            git commit -m "Update hash for version ${{ inputs.version }}"
-            git push origin HEAD
-          elif ! grep -q "$HASH $URL" README; then
+          if ! grep -q "$HASH $URL" README; then
             echo "hash $FILENAME sha256 $HASH $URL" >> README
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
