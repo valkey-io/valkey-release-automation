@@ -61,16 +61,29 @@ jobs:
 
             # Run update script
             ./update.sh ${{ steps.strip_version.outputs.stripped_version }}
+  
+      - name: Ensure Up-to-Date Branch
+        run: |
+          git checkout main
+          git pull origin main --rebase
+
+      - name: Check for Changes
+        run: |
+          if git diff --exit-code; then
+            echo "No changes detected. Skipping PR creation."
+            exit 0
+          fi
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          branch: update-${{ inputs.version }}
+          branch: update-${{ inputs.version }} | tr '.' '-'
           commit-message: "Update to version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           delete-branch: true
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+          signoff: true
+          author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           title: "Update to version ${{ inputs.version }}"
           body: |
             This pull request updates the repository to version `${{ inputs.version }}`.
