@@ -58,6 +58,7 @@ jobs:
       
       - name: Update new version
         run: |
+            cd valkey-container
             # Download the scripts for bashbrew in local
             jqt='.jq-template.awk'
             wget -qO "$jqt" 'https://github.com/docker-library/bashbrew/raw/9f6a35772ac863a0241f147c820354e4008edf38/scripts/jq-template.awk'
