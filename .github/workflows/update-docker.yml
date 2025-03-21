@@ -29,7 +29,7 @@ jobs:
       - name: Set up bashbrew
         uses: docker-library/bashbrew@v0.1.12
       
-      - name: Check if bashbrew in installed
+      - name: Check if bashbrew is installed
         run: |
           bashbrew --version
 
@@ -87,10 +87,19 @@ jobs:
           BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
 
+      - name: Debug Paths
+        run: |
+          pwd
+          echo "Current directory contents:"
+          ls -la
+          echo "valkey-container contents:"
+          ls -la valkey-container
+          echo "valkey-release-automation contents:"
+          ls -la valkey-release-automation
+
       - name: Update Docker Description
         run: |
-          cd valkey-container 
-          python ../valkey-release-automation/scripts/automate_docker_description.py bashbrew_output.json unstable/dockerhub-description.md
+          python valkey-release-automation/scripts/automate_docker_description.py valkey-container/bashbrew_output.json valkey-container/unstable/dockerhub-description.md
 
       - name: Ensure Up-to-Date Branch
         run: |
