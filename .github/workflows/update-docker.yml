@@ -10,6 +10,10 @@ on:
     secrets:
       PAT_TOKEN:
         required: true
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
 jobs:
   build-new-docker:
@@ -62,17 +66,48 @@ jobs:
             # Run update script
             ./update.sh ${{ steps.strip_version.outputs.stripped_version }}
 
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Checkout automation scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: ./valkey-release-automation
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Generate bashbrew output
+        id: generate-bashbrew
+        run: |
+          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
+          "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+
+      - name: Update Docker Description
+        run: |
+          python ./valkey-release-automation/scripts/automate_docker_description.py bashbrew_output.json ./valkey-container/unstable/dockerhub-description.md
+
+      - name: Ensure Up-to-Date Branch
+        run: |
+          cd ./valkey-container
+          git checkout main
+          git pull origin main --rebase
+
       - name: Check for Changes
         run: |
+          cd ./valkey-container
           if git diff --exit-code; then
             echo "No changes detected. Skipping PR creation."
             exit 0
           fi
 
       - name: Create Pull Request
+        id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
+          path: ./valkey-container
           branch: update-${{ inputs.version }}
           commit-message: "Update for version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
@@ -83,4 +118,13 @@ jobs:
           body: |
             This pull request updates the repository to version `${{ inputs.version }}`.
             Please review the changes and merge when appropriate.
+
+      - name: Update Docker Hub Description
+        if: steps.create-pr.outputs.pull-request-operation == 'created'
+        uses: peter-evans/dockerhub-description@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: nmanglor/test
+          readme-filepath: ./valkey-container/unstable/dockerhub-description.md
           
