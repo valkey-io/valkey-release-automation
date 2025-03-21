@@ -70,8 +70,3 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 **Note:** Remember to replace `<aws_account_id>` with your actual aws account id.
 ### c. Create a secret named `AWS_ROLE_TO_ASSUME`
 - The secret value for this token is the arn of the IAM role that you just created.
-
-## 4. Set up Docker Tokens
-Set up 2 Docker Tokens in Github Secrets:
-- DOCKERHUB_USERNAME: Username of the docker account
-- DOCKERHUB_TOKEN: PAT of the docker token 
