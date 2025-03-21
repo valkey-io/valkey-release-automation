@@ -82,6 +82,7 @@ jobs:
           cd valkey-container
           BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+          rm valkey-container/bashbrew_output.json
 
       - name: Update Docker Description
         run: |
