@@ -17,7 +17,9 @@ Create a Personal Access Token (PAT) with the following permissions:
 - **Actions:** Read and Write (To trigger and interact with github actions)
 - **Contents:** Read and Write (To access repository contents and modify them)
 - **Metadata:** Read-only (To access repository metadata)
+- **Pull Requests:** Read and Write (To create pull requests on other repositories)
 - **Workflows:** Read and Write (To trigger workflows in the automated bot repository) <br>
+
 Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 
 ## 2. Set up the S3 Buckets and add Tokens on GitHub Secrets
@@ -68,3 +70,8 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 **Note:** Remember to replace `<aws_account_id>` with your actual aws account id.
 ### c. Create a secret named `AWS_ROLE_TO_ASSUME`
 - The secret value for this token is the arn of the IAM role that you just created.
+
+## 4. Set up Docker Tokens
+Set up 2 Docker Tokens in Github Secrets:
+- DOCKERHUB_USERNAME: Username of the docker account
+- DOCKERHUB_TOKEN: PAT of the docker token 
