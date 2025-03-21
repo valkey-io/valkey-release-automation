@@ -94,8 +94,12 @@ jobs:
       - name: Ensure Up-to-Date Branch
         run: |
           cd valkey-container
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "Preparing changes for version ${{ inputs.version }}"
           git checkout mainline
-          git pull origin main --rebase
+          git pull origin mainline --rebase
 
       - name: Check for Changes
         run: |
