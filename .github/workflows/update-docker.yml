@@ -87,16 +87,6 @@ jobs:
           BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
 
-      - name: Debug Paths
-        run: |
-          pwd
-          echo "Current directory contents:"
-          ls -la
-          echo "valkey-container contents:"
-          ls -la valkey-container
-          echo "valkey-release-automation contents:"
-          ls -la valkey-release-automation
-
       - name: Update Docker Description
         run: |
           python valkey-release-automation/scripts/automate_docker_description.py valkey-container/bashbrew_output.json valkey-container/dockerhub-description.md
@@ -104,8 +94,12 @@ jobs:
       - name: Ensure Up-to-Date Branch
         run: |
           cd valkey-container
-          git checkout main
-          git pull origin main --rebase
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "Preparing changes for version ${{ inputs.version }}"
+          git checkout mainline
+          git pull origin mainline --rebase
 
       - name: Check for Changes
         run: |
@@ -138,6 +132,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: nmanglor/test
+          repository: valkey/valkey
           readme-filepath: valkey-container/dockerhub-description.md
           
