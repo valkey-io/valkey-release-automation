@@ -32,7 +32,7 @@ def update_section(content: str, section_header: str, new_content: str) -> str:
     what_is_section = content.find('\nWhat is [Valkey](https://github.com/valkey-io/valkey)?', search_start)
     next_header = content.find("\n# ", search_start)
     
-    # Find the closest next section
+    # Find the next closest section
     section_end = float('inf')
     for pos in [next_section, what_is_section, next_header]:
         if pos != -1 and pos < section_end:
@@ -45,11 +45,7 @@ def update_section(content: str, section_header: str, new_content: str) -> str:
     section_content_start = content.find("\n", section_start) + 1
     
     # Replace only the content between current section and next section
-    return (
-        content[:section_content_start] +
-        "\n" + new_content + "\n\n" +
-        content[section_end:]
-    )
+    return (content[:section_content_start] + "\n" + new_content + "\n\n" + content[section_end:])
 
 def update_docker_description(json_file: str, docker_description_file: str) -> None:
     with open(json_file) as f:
@@ -58,7 +54,7 @@ def update_docker_description(json_file: str, docker_description_file: str) -> N
     with open(docker_description_file, 'r') as f:
         content = f.read()
 
-    # Generate sections content
+    # Generate all the content for each section
     official_lines = []
     for entry in data["matrix"]["include"]:
         if "rc" not in entry["name"] and "unstable" not in entry["name"]:
@@ -89,7 +85,4 @@ def update_docker_description(json_file: str, docker_description_file: str) -> N
         f.write(content)
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit(1)
-    
     update_docker_description(sys.argv[1], sys.argv[2])
