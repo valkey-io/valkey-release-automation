@@ -25,7 +25,7 @@ jobs:
       - name: Set up bashbrew
         uses: docker-library/bashbrew@v0.1.12
       
-      - name: Check if bashbrew in installed
+      - name: Check if bashbrew is installed
         run: |
           bashbrew --version
 
@@ -33,6 +33,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ github.repository_owner }}/valkey-container
+          path: valkey-container
           token: ${{ secrets.PAT_TOKEN }}
       
       - name: Strip patch version
@@ -53,6 +54,7 @@ jobs:
       
       - name: Update new version
         run: |
+            cd valkey-container
             # Download the scripts for bashbrew in local
             jqt='.jq-template.awk'
             wget -qO "$jqt" 'https://github.com/docker-library/bashbrew/raw/9f6a35772ac863a0241f147c820354e4008edf38/scripts/jq-template.awk'
@@ -62,17 +64,54 @@ jobs:
             # Run update script
             ./update.sh ${{ steps.strip_version.outputs.stripped_version }}
 
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Checkout automation scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Generate bashbrew output
+        id: generate-bashbrew
+        run: |
+          cd valkey-container
+          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
+          "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+          
+      - name: Update Docker Description File
+        run: |
+          python valkey-release-automation/scripts/automate_docker_description.py valkey-container/bashbrew_output.json valkey-container/dockerhub-description.md
+          rm valkey-container/bashbrew_output.json
+
+      - name: Ensure Up-to-Date Branch
+        run: |
+          cd valkey-container
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add .
+          git commit -m "Preparing changes for version ${{ inputs.version }}"
+          git checkout mainline
+          git pull origin mainline --rebase
+
       - name: Check for Changes
         run: |
+          cd valkey-container
           if git diff --exit-code; then
             echo "No changes detected. Skipping PR creation."
             exit 0
           fi
 
       - name: Create Pull Request
+        id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
+          path: valkey-container
           branch: update-${{ inputs.version }}
           commit-message: "Update for version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
@@ -83,4 +122,3 @@ jobs:
           body: |
             This pull request updates the repository to version `${{ inputs.version }}`.
             Please review the changes and merge when appropriate.
-          
