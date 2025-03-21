@@ -75,28 +75,29 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/valkey-release-automation
-          path: ./valkey-release-automation
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Generate bashbrew output
         id: generate-bashbrew
         run: |
+          cd ../valkey-container
           BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
 
       - name: Update Docker Description
         run: |
-          python ./valkey-release-automation/scripts/automate_docker_description.py bashbrew_output.json ./valkey-container/unstable/dockerhub-description.md
+          cd ../valkey-container 
+          python ../valkey-release-automation/scripts/automate_docker_description.py bashbrew_output.json unstable/dockerhub-description.md
 
       - name: Ensure Up-to-Date Branch
         run: |
-          cd ./valkey-container
+          cd ../valkey-container
           git checkout main
           git pull origin main --rebase
 
       - name: Check for Changes
         run: |
-          cd ./valkey-container
+          cd ../valkey-container
           if git diff --exit-code; then
             echo "No changes detected. Skipping PR creation."
             exit 0
@@ -107,7 +108,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
-          path: ./valkey-container
+          path: ../valkey-container
           branch: update-${{ inputs.version }}
           commit-message: "Update for version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
@@ -126,5 +127,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: nmanglor/test
-          readme-filepath: ./valkey-container/unstable/dockerhub-description.md
+          readme-filepath: ../valkey-container/unstable/dockerhub-description.md
           
