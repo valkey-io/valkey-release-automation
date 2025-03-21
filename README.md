@@ -17,6 +17,7 @@ Create a Personal Access Token (PAT) with the following permissions:
 - **Actions:** Read and Write (To trigger and interact with github actions)
 - **Contents:** Read and Write (To access repository contents and modify them)
 - **Metadata:** Read-only (To access repository metadata)
+- **Pull Requests:** Read and Write (To create pull requests in a repository)
 - **Workflows:** Read and Write (To trigger workflows in the automated bot repository) <br>
 Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 
