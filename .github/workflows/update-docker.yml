@@ -132,6 +132,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: nmanglor/test
+          repository: valkey/valkey
           readme-filepath: valkey-container/dockerhub-description.md
           
