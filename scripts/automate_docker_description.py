@@ -25,24 +25,30 @@ def update_section(content: str, section_header: str, new_content: str) -> str:
     section_start = content.find(section_header)
     if section_start == -1:
         return content
-
-    # Find the next section or end of content
-    next_section_start = content.find("\n## ", section_start + len(section_header))
-    if next_section_start == -1:
-        # Look for next top-level header if no next section
-        next_section_start = content.find("\n# ", section_start + len(section_header))
-        if next_section_start == -1:
-            next_section_start = len(content)
-
-    # Replace only the content between sections
-    section_end = content.find("\n", section_start + len(section_header))
-    if section_end == -1:
+    
+    search_start = section_start + len(section_header)
+    
+    next_section = content.find("\n## ", search_start)
+    what_is_section = content.find("\n--------------", search_start)
+    next_header = content.find("\n# ", search_start)
+    
+    # Find the closest next section
+    section_end = float('inf')
+    for pos in [next_section, what_is_section, next_header]:
+        if pos != -1 and pos < section_end:
+            section_end = pos
+    
+    if section_end == float('inf'):
         section_end = len(content)
 
+    # Get the content until the section header
+    section_content_start = content.find("\n", section_start) + 1
+    
+    # Replace only the content between current section and next section
     return (
-        content[:section_end + 1] +
-        "\n" + new_content + "\n" +
-        content[next_section_start:]
+        content[:section_content_start] +
+        "\n" + new_content + "\n\n" +
+        content[section_end:]
     )
 
 def update_docker_description(json_file: str, docker_description_file: str) -> None:
