@@ -3,7 +3,9 @@ import sys
 import re
 
 def clean_tag(tag: str) -> str:
-    return tag.replace("valkey-container:", "")
+    if ":" in tag:
+        return tag.split(":", 1)[1]
+    return tag
 
 def format_tag_line(entry: dict) -> str:
     raw_tags = entry['meta']['entries'][0]['tags']
@@ -18,6 +20,31 @@ def format_tag_line(entry: dict) -> str:
     
     return f"- [{tags}](https://github.com/valkey-io/valkey-container/blob/master/{directory}/Dockerfile)"
 
+def update_section(content: str, section_header: str, new_content: str) -> str:
+    # Find the section
+    section_start = content.find(section_header)
+    if section_start == -1:
+        return content
+
+    # Find the next section or end of content
+    next_section_start = content.find("\n## ", section_start + len(section_header))
+    if next_section_start == -1:
+        # Look for next top-level header if no next section
+        next_section_start = content.find("\n# ", section_start + len(section_header))
+        if next_section_start == -1:
+            next_section_start = len(content)
+
+    # Replace only the content between sections
+    section_end = content.find("\n", section_start + len(section_header))
+    if section_end == -1:
+        section_end = len(content)
+
+    return (
+        content[:section_end + 1] +
+        "\n" + new_content + "\n" +
+        content[next_section_start:]
+    )
+
 def update_docker_description(json_file: str, docker_description_file: str) -> None:
     with open(json_file) as f:
         data = json.load(f)
@@ -29,48 +56,28 @@ def update_docker_description(json_file: str, docker_description_file: str) -> N
     official_lines = []
     for entry in data["matrix"]["include"]:
         if "rc" not in entry["name"] and "unstable" not in entry["name"]:
-            line = format_tag_line(entry) + "\n"
+            line = format_tag_line(entry)
             official_lines.append(line)
-    official_releases = "".join(official_lines)
+    official_releases = "\n".join(official_lines)
 
     rc_lines = []
     for entry in data["matrix"]["include"]:
         if "rc" in entry["name"]:
-            line = format_tag_line(entry) + "\n"
+            line = format_tag_line(entry)
             rc_lines.append(line)
-    release_candidates = "".join(rc_lines)
+    release_candidates = "\n".join(rc_lines)
 
     unstable_lines = []
     for entry in data["matrix"]["include"]:
         if "unstable" in entry["name"]:
-            line = format_tag_line(entry) + "\n"
+            line = format_tag_line(entry)
             unstable_lines.append(line)
-    latest_unstable = "".join(unstable_lines)
+    latest_unstable = "\n".join(unstable_lines)
 
-    # Replace sections with more flexible whitespace matching
-    pattern = r'(## Official releases\s+).*?(##|$)'
-    content = re.sub(
-        pattern,
-        f'\\1{official_releases}\\2',
-        content,
-        flags=re.DOTALL
-    )
-    
-    pattern = r'(## Release candidates\s+).*?(##|$)'
-    content = re.sub(
-        pattern,
-        f'\\1{release_candidates}\\2',
-        content,
-        flags=re.DOTALL
-    )
-    
-    pattern = r'(## Latest unstable\s+).*?(##|$)'
-    content = re.sub(
-        pattern,
-        f'\\1{latest_unstable}\\2',
-        content,
-        flags=re.DOTALL
-    )
+    # Update each section separately
+    content = update_section(content, "## Official releases", official_releases)
+    content = update_section(content, "## Release candidates", release_candidates)
+    content = update_section(content, "## Latest unstable", latest_unstable)
 
     with open(docker_description_file, 'w') as f:
         f.write(content)
