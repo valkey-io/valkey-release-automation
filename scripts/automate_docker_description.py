@@ -29,7 +29,7 @@ def update_section(content: str, section_header: str, new_content: str) -> str:
     search_start = section_start + len(section_header)
     
     next_section = content.find("\n## ", search_start)
-    what_is_section = content.find("\n--------------", search_start)
+    what_is_section = content.find('\nWhat is [Valkey](https://github.com/valkey-io/valkey)?', search_start)
     next_header = content.find("\n# ", search_start)
     
     # Find the closest next section
