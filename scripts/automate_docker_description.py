@@ -1,6 +1,5 @@
 import json
 import sys
-import re
 
 def clean_tag(tag: str) -> str:
     if ":" in tag:

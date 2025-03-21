@@ -90,8 +90,6 @@ jobs:
       version: ${{ needs.process-inputs.outputs.version }}
     secrets:
       PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
   
   generate-build-matrix:
     needs:
