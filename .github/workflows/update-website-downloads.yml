@@ -1,0 +1,150 @@
+name: Update Website Downloads
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version of the package to update website for"
+        type: string
+        required: true
+    secrets:
+      PAT_TOKEN:
+        description: "PAT token for website repository"
+        required: true
+
+env:
+  RELEASE_TEMPLATE: |
+    ---
+    title: "${VERSION}"
+    date: ${RELEASE_DATE}
+    extra:
+        tag: "${VERSION}"
+        artifact_source: https://download.valkey.io/releases/
+        artifact_fname: "valkey"
+        container_registry:
+            -
+                name: "Docker Hub"
+                link: https://hub.docker.com/r/valkey/valkey/
+                id: "valkey/valkey"
+                tags:
+    $(echo "$TAGS" | while read -r tag; do echo "                - \"$tag\""; done)
+        packages:
+
+        artifacts:
+            -   distro: focal
+                arch:
+                    -   arm64
+                    -   x86_64
+            -   distro: jammy
+                arch:
+                    -   x86_64
+            -   distro: noble
+                arch:
+                    -   x86_64
+    ---
+
+    Valkey ${VERSION} Release
+
+jobs:
+  update-website:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+            echo "Invalid version format. Expected format: x.y.z or 'unstable'"
+            exit 1
+          fi
+
+      - name: Checkout website repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-io.github.io
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Checkout container repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-container
+          path: valkey-container
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Set up bashbrew
+        uses: docker-library/bashbrew@v0.1.12
+
+      - name: Generate bashbrew output
+        id: generate-bashbrew
+        run: |
+          cd valkey-container
+          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
+          "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+          echo "Bashbrew output:"
+          cat bashbrew_output.json | jq '.'
+          
+          VERSION="${{ inputs.version }}"
+          echo "Extracting tags for version $VERSION:"
+          jq -r --arg version "$VERSION" '.matrix.include[] | 
+            select(.name == $version or .name == ($version + "-alpine")) | 
+            .meta.entries[0].tags[] | 
+            sub("valkey-container:"; "")' bashbrew_output.json || echo "No tags found"
+
+      - name: Create or update release file
+        run: |
+          VERSION="${{ inputs.version }}"
+          RELEASE_DATE=$(date -u +"%Y-%m-%d")
+          VERSION_DASHED=$(echo $VERSION | tr '.' '-')
+          
+          # Get all tags and verify we got them
+          TAGS=$(jq -r --arg version "$VERSION" '.matrix.include[] | 
+            select(.name == $version or .name == ($version + "-alpine")) | 
+            .meta.entries[0].tags[] | 
+            sub("valkey-container:"; "")' valkey-container/bashbrew_output.json || echo "")
+          
+          # Debug: print tags
+          echo "Found tags:"
+          echo "$TAGS"
+          
+          if [ -z "$TAGS" ]; then
+            echo "Error: No tags found for version $VERSION"
+            exit 1
+          fi
+          
+          # Format tags for YAML
+          FORMATTED_TAGS=""
+          while read -r tag; do
+            FORMATTED_TAGS="${FORMATTED_TAGS}                - \"${tag}\"\n"
+          done <<< "$TAGS"
+          
+          if [[ $VERSION =~ ([0-9]+\.[0-9]+\.[0-9]+)-rc[0-9]+$ ]]; then
+            BASE_VERSION=${BASH_REMATCH[1]}
+            BASE_VERSION_DASHED=$(echo $BASE_VERSION | tr '.' '-')
+            EXISTING_FILE="content/download/releases/v${BASE_VERSION_DASHED}.md"
+            
+            if [ -f "$EXISTING_FILE" ]; then
+              echo "Updating existing file for RC: $EXISTING_FILE"
+              sed -i "s/title: \".*\"/title: \"${VERSION}\"/" "$EXISTING_FILE"
+              sed -i "s/date: .*/date: ${RELEASE_DATE}/" "$EXISTING_FILE"
+              sed -i "s/tag: \".*\"/tag: \"${VERSION}\"/" "$EXISTING_FILE"
+              sed -i "/tags:/,/packages:/c\            tags:\n${FORMATTED_TAGS}            packages:" "$EXISTING_FILE"
+              sed -i "s/Valkey .* Release/Valkey ${VERSION} Release/" "$EXISTING_FILE"
+            else
+              echo "$RELEASE_TEMPLATE" > "content/download/releases/v${VERSION_DASHED}.md"
+            fi
+          else
+            echo "$RELEASE_TEMPLATE" > "content/download/releases/v${VERSION_DASHED}.md"
+          fi
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          branch: update-downloads-${{ inputs.version }}
+          commit-message: "Update the ${{ inputs.version }} release link on the website"
+          committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          delete-branch: true
+          signoff: true
+          author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          title: "Update the ${{ inputs.version }} release link on the website"
+          body: |
+            This pull request updates the release link for Valkey version ${{ inputs.version }}.
+            - Tags are dynamically generated from bashbrew output
