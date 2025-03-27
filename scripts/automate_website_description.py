@@ -20,7 +20,7 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                 if meta_entries:
                     # Get all tags and filter out RC-specific ones
                     tags = [
-                        tag.split(":")[-1] 
+                        tag.replace("valkey-container:", "") 
                         for tag in meta_entries[0].get("tags", [])
                         if "-rc" not in tag
                     ]
