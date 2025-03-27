@@ -9,12 +9,12 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
     try:
         with open(json_file, 'r') as f:
             data = json.load(f)
-        
+
         logging.info(f"Processing version: {version}")
-        
+
         target_tags = []
         base_version = version.split('-rc')[0] 
-        
+
         for entry in data["matrix"]["include"]:
             logging.info(f"Checking entry: {entry['name']}")
             # If this entry matches our version (more flexible matching)
@@ -23,7 +23,7 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                 if meta_entries:
                     all_tags = meta_entries[0].get("tags", [])
                     logging.info(f"All tags for {entry['name']}: {all_tags}")
-                    
+
                     # Get all tags and filter out RC-specific ones if it's an RC version
                     tags = [
                         tag.replace("valkey-container:", "").split(":")[-1]
@@ -32,13 +32,13 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                     ]
                     logging.info(f"Filtered tags: {tags}")
                     target_tags.extend(tags)
-        
+
         logging.info(f"Final tags: {target_tags}")
         return target_tags
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
-        
+
         return target_tags
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
