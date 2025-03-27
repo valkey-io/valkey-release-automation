@@ -45,17 +45,7 @@ def update_docker_description(json_file: str, template_file: str, output_file: s
         
         with open(template_file, 'r') as f:
             template = f.read()
-    except FileNotFoundError as e:
-        logging.error(f"File not found: {e}")
-        sys.exit(1)
-    except json.JSONDecodeError:
-        logging.error(f"Failed to parse JSON file '{json_file}'. Please check its syntax.")
-        sys.exit(1)
-    except Exception as e:
-        logging.error(f"Error reading input files: {e}")
-        sys.exit(1)
 
-    try:
         official_releases = []
         release_candidates = []
         latest_unstable = []
@@ -83,6 +73,12 @@ def update_docker_description(json_file: str, template_file: str, output_file: s
         with open(output_file, 'w') as f:
             f.write(content)
 
+    except FileNotFoundError as e:
+        logging.error(f"File not found: {e}")
+        sys.exit(1)
+    except json.JSONDecodeError:
+        logging.error(f"Failed to parse JSON file '{json_file}'. Please check its syntax.")
+        sys.exit(1)
     except KeyError as e:
         logging.error(f"Invalid JSON structure: {e}")
         sys.exit(1)
