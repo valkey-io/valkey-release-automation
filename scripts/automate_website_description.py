@@ -1,6 +1,5 @@
 import json
 import sys
-import os
 import logging
 from datetime import datetime
 
@@ -11,29 +10,38 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
         with open(json_file, 'r') as f:
             data = json.load(f)
             
-        tags = []
+        target_tags = []
+        base_version = version.split('-rc')[0] 
+        
         for entry in data["matrix"]["include"]:
-            if entry["name"] == version or entry["name"] == f"{version}-alpine":
-                tags.extend([
-                    tag.replace("valkey-container:", "") 
-                    for tag in entry["meta"]["entries"][0]["tags"]
-                ])
-        return tags
+            # If this entry matches our version
+            if base_version in entry["name"]:
+                meta_entries = entry.get("meta", {}).get("entries", [])
+                if meta_entries:
+                    # Get all tags and filter out RC-specific ones
+                    tags = [
+                        tag.replace("valkey-container:", "") 
+                        for tag in meta_entries[0].get("tags", [])
+                        if "-rc" not in tag
+                    ]
+                    target_tags.extend(tags)
+        
+        return target_tags
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
 
 def update_website_release(version: str, template_file: str, bashbrew_file: str, output_path: str) -> None:
     try:
-        # Read input files
+        # Read template file
         with open(template_file, 'r') as f:
             template = f.read()
 
-        # Get tags and format them
+        # Get and format tags
         tags = get_tags_from_bashbrew(bashbrew_file, version)
         tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
 
-        # Handle RC versions
+        # Handle RC versions for file path
         is_rc = "-rc" in version
         if is_rc:
             base_version = version.split("-rc")[0]
