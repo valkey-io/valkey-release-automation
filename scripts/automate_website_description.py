@@ -11,34 +11,21 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
             data = json.load(f)
             
         target_tags = []
-        is_rc = "-rc" in version
-        base_version = version.split('-rc')[0] 
-        
-        logging.debug(f"Processing version: {version}")
-        logging.debug(f"Is RC: {is_rc}")
-        logging.debug(f"Base version: {base_version}")
+        base_version = version.split('-rc')[0]  
+        major_minor = '.'.join(base_version.split('.')[:2]) 
         
         for entry in data["matrix"]["include"]:
-            logging.debug(f"Checking entry name: {entry['name']}")
-            if base_version in entry["name"]:
-                logging.debug(f"Found matching entry: {entry['name']}")
+            if major_minor in entry["name"]: 
                 meta_entries = entry.get("meta", {}).get("entries", [])
                 if meta_entries:
-                    all_tags = meta_entries[0].get("tags", [])
-                    logging.debug(f"All tags found: {all_tags}")
-                    
-                    # Get all tags and filter out RC-specific ones
-                    tags = []
-                    for tag in all_tags:
+                    for tag in meta_entries[0].get("tags", []):
                         clean_tag = tag.split(":")[-1]
-                        if "-rc" not in clean_tag:
-                            tags.append(clean_tag)
-                            logging.debug(f"Adding tag: {clean_tag}")
-                    
-                    target_tags.extend(tags)
+                        # For RC versions we want the major.minor tags without -rc
+                        if major_minor in clean_tag and "-rc" not in clean_tag:
+                            target_tags.append(clean_tag)
         
-        logging.debug(f"Final tags list: {target_tags}")
-        return target_tags
+        # Sort to maintain consistent order
+        return sorted(list(set(target_tags)))
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
@@ -48,11 +35,9 @@ def update_website_release(version: str, template_file: str, bashbrew_file: str,
         with open(template_file, 'r') as f:
             template = f.read()
 
-        # Get and format tags
         tags = get_tags_from_bashbrew(bashbrew_file, version)
         tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
 
-        # Handle RC versions for file path
         is_rc = "-rc" in version
         if is_rc:
             base_version = version.split("-rc")[0]
@@ -62,14 +47,12 @@ def update_website_release(version: str, template_file: str, bashbrew_file: str,
             version_dashed = version.replace(".", "-")
             file_path = f"{output_path}/v{version_dashed}.md"
 
-        # Create content using template
         content = template.format(
             version=version,
             date=datetime.now().strftime("%Y-%m-%d"),
             tags=tags_section
         )
 
-        # Write the file
         with open(file_path, 'w') as f:
             f.write(content)
 
