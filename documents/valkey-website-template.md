@@ -21,6 +21,7 @@ extra:
                 -   x86_64
         -   distro: jammy
             arch:
+                -   arm64
                 -   x86_64
         -   distro: noble
             arch:
