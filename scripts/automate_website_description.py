@@ -3,7 +3,7 @@ import sys
 import logging
 from datetime import datetime
 
-logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def get_tags_from_bashbrew(json_file: str, version: str) -> list:
     try:
@@ -12,23 +12,32 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
             
         target_tags = []
         is_rc = "-rc" in version
-        base_version = version.split('-rc')[0] if is_rc else version
+        base_version = version.split('-rc')[0] 
+        
+        logging.debug(f"Processing version: {version}")
+        logging.debug(f"Is RC: {is_rc}")
+        logging.debug(f"Base version: {base_version}")
         
         for entry in data["matrix"]["include"]:
-            # Match exact version (for both regular and alpine variants)
-            if entry["name"] == base_version or entry["name"] == f"{base_version}-alpine":
+            logging.debug(f"Checking entry name: {entry['name']}")
+            if base_version in entry["name"]:
+                logging.debug(f"Found matching entry: {entry['name']}")
                 meta_entries = entry.get("meta", {}).get("entries", [])
                 if meta_entries:
-                    # For RC versions, get the major.minor tags
-                    # For regular versions, get only the exact version tags
-                    tags = [
-                        tag.split(":")[-1]  # Remove prefix
-                        for tag in meta_entries[0].get("tags", [])
-                        if (is_rc and not "-rc" in tag and ".".join(base_version.split(".")[:2]) in tag) or  # RC case
-                           (not is_rc and base_version in tag)  # Regular version case
-                    ]
+                    all_tags = meta_entries[0].get("tags", [])
+                    logging.debug(f"All tags found: {all_tags}")
+                    
+                    # Get all tags and filter out RC-specific ones
+                    tags = []
+                    for tag in all_tags:
+                        clean_tag = tag.split(":")[-1]
+                        if "-rc" not in clean_tag:
+                            tags.append(clean_tag)
+                            logging.debug(f"Adding tag: {clean_tag}")
+                    
                     target_tags.extend(tags)
         
+        logging.debug(f"Final tags list: {target_tags}")
         return target_tags
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
