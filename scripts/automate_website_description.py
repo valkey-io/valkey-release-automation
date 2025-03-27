@@ -1,7 +1,6 @@
 import json
 import sys
 import os
-import re
 import logging
 from datetime import datetime
 
@@ -26,15 +25,15 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
 
 def update_website_release(version: str, template_file: str, bashbrew_file: str, output_path: str) -> None:
     try:
-        logging.info(f"Processing version: {version}")
-        
-        release_date = datetime.now().strftime("%Y-%m-%d")
-        logging.info(f"Release date: {release_date}")
-        
-        logging.info("Getting tags from bashbrew output")
+        # Read input files
+        with open(template_file, 'r') as f:
+            template = f.read()
+
+        # Get tags and format them
         tags = get_tags_from_bashbrew(bashbrew_file, version)
-        logging.info(f"Found tags: {tags}")
-        
+        tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
+
+        # Handle RC versions
         is_rc = "-rc" in version
         if is_rc:
             base_version = version.split("-rc")[0]
@@ -44,44 +43,16 @@ def update_website_release(version: str, template_file: str, bashbrew_file: str,
             version_dashed = version.replace(".", "-")
             file_path = f"{output_path}/v{version_dashed}.md"
 
-        with open(template_file, 'r') as f:
-            template = f.read()
+        # Create content using template
+        content = template.format(
+            version=version,
+            date=datetime.now().strftime("%Y-%m-%d"),
+            tags=tags_section
+        )
 
-        if is_rc and os.path.exists(file_path):
-            # Update existing file for RC
-            with open(file_path, 'r') as f:
-                content = f.read()
-            
-            # Update the fields
-            content = (
-                content
-                .replace(f'title: "..."', f'title: "{version}"')
-                .replace(f'date: ...', f'date: {release_date}')
-                .replace(f'tag: "..."', f'tag: "{version}"')
-            )
-            
-            # Update tags section
-            tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
-            content = re.sub(
-                r'tags:.*?packages:',
-                f'tags:\n{tags_section}\n            packages:',
-                content,
-                flags=re.DOTALL
-            )
-            
-            with open(file_path, 'w') as f:
-                f.write(content)
-        else:
-            # Create new file using template
-            tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
-            content = template.format(
-                version=version,
-                date=release_date,
-                tags=tags_section
-            )
-            
-            with open(file_path, 'w') as f:
-                f.write(content)
+        # Write the file
+        with open(file_path, 'w') as f:
+            f.write(content)
 
     except Exception as e:
         logging.error(f"Error updating website release: {e}")
@@ -95,5 +66,5 @@ if __name__ == "__main__":
     try:
         update_website_release(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
     except Exception as e:
-        logging.error(f"An error occurred: {e}")
+        logging.error(f"An unexpected error occurred: {e}")
         sys.exit(1)
