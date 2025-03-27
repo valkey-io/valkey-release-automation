@@ -11,20 +11,30 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
             data = json.load(f)
             
         target_tags = []
-        base_version = version.split('-rc')[0] 
+        is_rc = "-rc" in version
+        base_version = version.split('-rc')[0] if is_rc else version
         
         for entry in data["matrix"]["include"]:
-            # If this entry matches our version
             if base_version in entry["name"]:
                 meta_entries = entry.get("meta", {}).get("entries", [])
                 if meta_entries:
-                    # Get all tags and filter out RC-specific ones
-                    tags = [
-                        tag.replace("valkey-container:", "") 
-                        for tag in meta_entries[0].get("tags", [])
-                        if "-rc" not in tag
-                    ]
-                    target_tags.extend(tags)
+                    tags = meta_entries[0].get("tags", [])
+                    filtered_tags = []
+                    
+                    for tag in tags:
+                        # Remove any prefix before the actual tag
+                        clean_tag = tag.split(":")[-1] if ":" in tag else tag
+                        
+                        if is_rc:
+                            # For RC releases, keep only major.minor tags
+                            if "-rc" not in clean_tag and base_version.rsplit('.', 1)[0] in clean_tag:
+                                filtered_tags.append(clean_tag)
+                        else:
+                            # For regular releases, keep only full version tags
+                            if base_version in clean_tag:
+                                filtered_tags.append(clean_tag)
+                    
+                    target_tags.extend(filtered_tags)
         
         return target_tags
     except Exception as e:
@@ -33,7 +43,6 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
 
 def update_website_release(version: str, template_file: str, bashbrew_file: str, output_path: str) -> None:
     try:
-        # Read template file
         with open(template_file, 'r') as f:
             template = f.read()
 
