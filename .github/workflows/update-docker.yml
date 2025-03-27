@@ -94,24 +94,6 @@ jobs:
           cd valkey-container
           git reset HEAD~1
 
-      - name: Ensure Up-to-Date Branch
-        run: |
-          cd valkey-container
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git add .
-          git commit -m "Preparing changes for version ${{ inputs.version }}"
-          git checkout mainline
-          git pull origin mainline --rebase
-
-      - name: Check for Changes
-        run: |
-          cd valkey-container
-          if git diff --exit-code origin/mainline; then
-            echo "No changes detected. Skipping PR creation."
-            exit 0
-          fi
-
       - name: Create Pull Request
         id: create-pr
         uses: peter-evans/create-pull-request@v7
@@ -119,7 +101,7 @@ jobs:
           token: ${{ secrets.PAT_TOKEN }}
           path: valkey-container
           branch: update-${{ inputs.version }}
-          commit-message: "Update for version ${{ inputs.version }}"
+          commit-message: "Preparing changes for version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           delete-branch: true
           signoff: true
