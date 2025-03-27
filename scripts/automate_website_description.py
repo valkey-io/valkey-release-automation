@@ -20,7 +20,7 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                 if meta_entries:
                     # Get all tags and filter out RC-specific ones
                     tags = [
-                        tag.replace("valkey-container:", "") 
+                        tag.split(":")[-1] 
                         for tag in meta_entries[0].get("tags", [])
                         if "-rc" not in tag
                     ]
@@ -33,7 +33,6 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
 
 def update_website_release(version: str, template_file: str, bashbrew_file: str, output_path: str) -> None:
     try:
-        # Read template file
         with open(template_file, 'r') as f:
             template = f.read()
 
