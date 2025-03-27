@@ -1,5 +1,7 @@
 import json
 import sys
+import os
+import re
 import logging
 from datetime import datetime
 
@@ -24,9 +26,14 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
 
 def update_website_release(version: str, template_file: str, bashbrew_file: str, output_path: str) -> None:
     try:
-        release_date = datetime.now().strftime("%Y-%m-%d")
+        logging.info(f"Processing version: {version}")
         
+        release_date = datetime.now().strftime("%Y-%m-%d")
+        logging.info(f"Release date: {release_date}")
+        
+        logging.info("Getting tags from bashbrew output")
         tags = get_tags_from_bashbrew(bashbrew_file, version)
+        logging.info(f"Found tags: {tags}")
         
         is_rc = "-rc" in version
         if is_rc:
