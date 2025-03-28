@@ -10,9 +10,10 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
         with open(json_file, 'r') as f:
             data = json.load(f)
             
-        target_tags = []
         base_version = version.split('-rc')[0]  
         major_minor = '.'.join(base_version.split('.')[:2]) 
+
+        seen_tags = dict.fromkeys([])
         
         for entry in data["matrix"]["include"]:
             if major_minor in entry["name"]: 
@@ -22,9 +23,9 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                         clean_tag = tag.split(":")[-1]
                         # For RC versions we want the major.minor tags without -rc
                         if major_minor in clean_tag and "-rc" not in clean_tag:
-                            target_tags.append(clean_tag)
+                            seen_tags = dict.fromkeys([])
         
-        return list(set(target_tags))
+        return list(seen_tags.keys())
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
