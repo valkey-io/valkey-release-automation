@@ -46,14 +46,12 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/valkey-release-automation
           path: valkey-release-automation
-          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Checkout website repository
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/valkey-io.github.io
           path: valkey-io.github.io
-          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Generate bashbrew output
         id: generate-bashbrew
@@ -62,18 +60,31 @@ jobs:
           BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
 
+      - name: Format version for filename
+        id: format-version
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [[ "$VERSION" == *"-rc"* ]]; then
+            # For RC versions, remove the RC part
+            VERSION_BASE=${VERSION%-rc*}
+            VERSION_DASHED=${VERSION_BASE//./-}
+          else
+            VERSION_DASHED=${VERSION//./-}
+          fi
+          echo "version_dashed=$VERSION_DASHED" >> $GITHUB_OUTPUT
+
       - name: Update Website Release File
         run: |
           python valkey-release-automation/scripts/automate_website_description.py \
             ${{ inputs.version }} \
-            valkey-release-automation/documents/valkey-website-template.md \
+            valkey-io.github.io/templates/valkey-website-template.md \
             valkey-container/bashbrew_output.json \
             valkey-io.github.io/content/download/releases
           rm valkey-container/bashbrew_output.json
           cd valkey-io.github.io
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add content/download/releases/
+          git add "content/download/releases/v${{ steps.format-version.outputs.version_dashed }}.md"
           git commit -m "Update website for version ${{ inputs.version }}"
 
       - name: Create Pull Request
@@ -89,5 +100,5 @@ jobs:
           author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           title: "Update website for version ${{ inputs.version }}"
           body: |
-            This pull request updates the release link for Valkey version ${{ inputs.version }}.
-            - Tags are dynamically generated from bashbrew output
+            This pull request updates the downloads page of the valkey website with the new release ${{ inputs.version }}.
+            Please review the changes and merge when appropriate.
