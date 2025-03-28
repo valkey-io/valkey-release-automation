@@ -16,8 +16,6 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
         major_minor = '.'.join(base_version.split('.')[:2]) 
         
         for entry in data["matrix"]["include"]:
-            # For RC versions, use major.minor matching
-            # For regular versions, use exact version matching
             version_to_match = major_minor if is_rc else base_version
             
             if version_to_match in entry["name"]:  
@@ -26,11 +24,9 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                     for tag in meta_entries[0].get("tags", []):
                         clean_tag = tag.split(":")[-1]  
                         if is_rc:
-                            # RC version: keep major.minor tags without -rc
                             if major_minor in clean_tag and "-rc" not in clean_tag:
                                 target_tags.append(clean_tag)
                         else:
-                            # Regular version: keep only exact version tags
                             if base_version in clean_tag:
                                 target_tags.append(clean_tag)
         
