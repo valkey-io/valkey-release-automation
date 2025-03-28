@@ -11,17 +11,28 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
             data = json.load(f)
             
         target_tags = []
-        base_version = version.split('-rc')[0]  # "8.1.0"
-        major_minor = '.'.join(base_version.split('.')[:2])  # "8.1"
+        is_rc = "-rc" in version
+        base_version = version.split('-rc')[0] 
+        major_minor = '.'.join(base_version.split('.')[:2]) 
         
         for entry in data["matrix"]["include"]:
-            if major_minor in entry["name"]:  # Matches "8.1.0-rc2" and "8.1.0-rc2-alpine"
+            # For RC versions, use major.minor matching
+            # For regular versions, use exact version matching
+            version_to_match = major_minor if is_rc else base_version
+            
+            if version_to_match in entry["name"]:  
                 meta_entries = entry.get("meta", {}).get("entries", [])
                 if meta_entries:
                     for tag in meta_entries[0].get("tags", []):
-                        clean_tag = tag.split(":")[-1]  # Remove "valkey-container:" prefix
-                        if major_minor in clean_tag and "-rc" not in clean_tag:
-                            target_tags.append(clean_tag)
+                        clean_tag = tag.split(":")[-1]  
+                        if is_rc:
+                            # RC version: keep major.minor tags without -rc
+                            if major_minor in clean_tag and "-rc" not in clean_tag:
+                                target_tags.append(clean_tag)
+                        else:
+                            # Regular version: keep only exact version tags
+                            if base_version in clean_tag:
+                                target_tags.append(clean_tag)
         
         return target_tags
     except Exception as e:
