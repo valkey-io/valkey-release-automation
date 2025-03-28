@@ -52,6 +52,7 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/valkey-io.github.io
           path: valkey-io.github.io
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Generate bashbrew output
         id: generate-bashbrew
