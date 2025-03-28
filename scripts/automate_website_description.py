@@ -10,22 +10,20 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
         with open(json_file, 'r') as f:
             data = json.load(f)
             
-        base_version = version.split('-rc')[0]  
-        major_minor = '.'.join(base_version.split('.')[:2]) 
-
-        seen_tags = dict.fromkeys([])
+        target_tags = []
+        base_version = version.split('-rc')[0]  # "8.1.0"
+        major_minor = '.'.join(base_version.split('.')[:2])  # "8.1"
         
         for entry in data["matrix"]["include"]:
-            if major_minor in entry["name"]: 
+            if major_minor in entry["name"]:  # Matches "8.1.0-rc2" and "8.1.0-rc2-alpine"
                 meta_entries = entry.get("meta", {}).get("entries", [])
                 if meta_entries:
                     for tag in meta_entries[0].get("tags", []):
-                        clean_tag = tag.split(":")[-1]
-                        # For RC versions we want the major.minor tags without -rc
+                        clean_tag = tag.split(":")[-1]  # Remove "valkey-container:" prefix
                         if major_minor in clean_tag and "-rc" not in clean_tag:
-                            seen_tags = dict.fromkeys([])
+                            target_tags.append(clean_tag)
         
-        return list(seen_tags.keys())
+        return target_tags
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
