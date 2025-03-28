@@ -24,8 +24,7 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
                         if major_minor in clean_tag and "-rc" not in clean_tag:
                             target_tags.append(clean_tag)
         
-        # Sort to maintain consistent order
-        return sorted(list(set(target_tags)))
+        return list(set(target_tags))
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
