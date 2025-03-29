@@ -10,10 +10,16 @@ on:
     secrets:
       PAT_TOKEN:
         required: true
+    outputs:
+      bashbrew_output:
+        description: "Bashbrew output in JSON format"
+        value: ${{ jobs.build-new-docker.outputs.bashbrew_json }}
 
 jobs:
   build-new-docker:
     runs-on: ubuntu-latest
+    outputs:
+      bashbrew_json: ${{ steps.generate-bashbrew.outputs.bashbrew_content }}
     steps:
       - name: Validate inputs
         run: |
@@ -85,6 +91,7 @@ jobs:
           cd valkey-container
           BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+          echo "bashbrew_content=$(cat bashbrew_output.json)" >> $GITHUB_OUTPUT
 
       - name: Update Docker Description File
         run: |
