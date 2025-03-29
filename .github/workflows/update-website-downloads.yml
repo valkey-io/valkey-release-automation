@@ -7,6 +7,10 @@ on:
         type: string
         description: "Version of the package to build"
         required: true
+      bashbrew_json:
+        type: string
+        description: "Bashbrew output from docker automation"
+        required: true
     secrets:
       PAT_TOKEN:
         required: true
@@ -21,13 +25,6 @@ jobs:
             echo "Invalid version format. Expected format: x.y.z or 'unstable'"
             exit 1
           fi
-      
-      - name: Set up bashbrew
-        uses: docker-library/bashbrew@v0.1.12
-      
-      - name: Check if bashbrew is installed
-        run: |
-          bashbrew --version
 
       - name: Checkout container repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -54,13 +51,6 @@ jobs:
           path: valkey-io.github.io
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Generate bashbrew output
-        id: generate-bashbrew
-        run: |
-          cd valkey-container
-          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
-          "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
-
       - name: Format version for filename
         id: format-version
         run: |
@@ -76,6 +66,8 @@ jobs:
 
       - name: Update Website Release File
         run: |
+          echo '${{ inputs.bashbrew_json }}' > bashbrew_output.json
+
           python valkey-release-automation/scripts/automate_website_description.py \
             ${{ inputs.version }} \
             valkey-io.github.io/templates/valkey-website-template.md \

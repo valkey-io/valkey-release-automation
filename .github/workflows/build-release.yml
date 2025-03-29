@@ -139,11 +139,10 @@ jobs:
       - process-inputs
       - update-valkey-hashes
       - update-docker
-      - release-build-linux-x86-packages
-      - release-build-linux-arm-packages
     if: needs.process-inputs.outputs.environment == 'prod'
     uses: ./.github/workflows/update-website-downloads.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      bashbrew_json: ${{ needs.update-docker.outputs.bashbrew_output }}
     secrets:
       PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
