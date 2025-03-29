@@ -66,7 +66,7 @@ jobs:
 
       - name: Update Website Release File
         run: |
-          echo '${{ inputs.bashbrew_json }}' > bashbrew_output.json
+          echo '${{ inputs.bashbrew_json }}' > valkey-container/bashbrew_output.json
 
           python valkey-release-automation/scripts/automate_website_description.py \
             ${{ inputs.version }} \
