@@ -52,7 +52,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
 
       - name: Make Valkey
-        run: make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+        run: make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
       
       - name: Create Tarball and SHA256sums
         run: |
