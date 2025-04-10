@@ -17,8 +17,9 @@ Create a Personal Access Token (PAT) with the following permissions:
 - **Actions:** Read and Write (To trigger and interact with github actions)
 - **Contents:** Read and Write (To access repository contents and modify them)
 - **Metadata:** Read-only (To access repository metadata)
-- **Pull Requests:** Read and Write (To create pull requests in a repository)
+- **Pull Requests:** Read and Write (To create pull requests on other repositories)
 - **Workflows:** Read and Write (To trigger workflows in the automated bot repository) <br>
+
 Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 
 ## 2. Set up the S3 Buckets and add Tokens on GitHub Secrets
