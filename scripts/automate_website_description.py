@@ -5,10 +5,9 @@ from datetime import datetime
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
-def get_tags_from_bashbrew(json_file: str, version: str) -> list:
+def get_tags_from_bashbrew(json_str: str, version: str) -> list:
     try:
-        with open(json_file, 'r') as f:
-            data = json.load(f)
+        data = json.loads(json_str)
             
         target_tags = []
         is_rc = "-rc" in version
@@ -35,12 +34,12 @@ def get_tags_from_bashbrew(json_file: str, version: str) -> list:
         logging.error(f"Error getting tags from bashbrew: {e}")
         raise
 
-def update_website_release(version: str, template_file: str, bashbrew_file: str, output_path: str) -> None:
+def update_website_release(version: str, template_file: str, bashbrew_json: str, output_path: str) -> None:
     try:
         with open(template_file, 'r') as f:
             template = f.read()
 
-        tags = get_tags_from_bashbrew(bashbrew_file, version)
+        tags = get_tags_from_bashbrew(bashbrew_json, version)
         tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
 
         is_rc = "-rc" in version
@@ -67,7 +66,7 @@ def update_website_release(version: str, template_file: str, bashbrew_file: str,
 
 if __name__ == "__main__":
     if len(sys.argv) != 5:
-        logging.error("Usage: python automate_website_release.py <version> <template_file> <bashbrew_json> <output_path>")
+        logging.error("Usage: python automate_website_release.py <version> <template_file> <bashbrew_json_string> <output_path>")
         sys.exit(1)
     
     try:

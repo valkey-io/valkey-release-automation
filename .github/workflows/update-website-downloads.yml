@@ -26,13 +26,6 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout container repository
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-        with:
-          repository: ${{ github.repository_owner }}/valkey-container
-          path: valkey-container
-          token: ${{ secrets.PAT_TOKEN }}
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -66,14 +59,11 @@ jobs:
 
       - name: Update Website Release File
         run: |
-          echo '${{ inputs.bashbrew_json }}' > valkey-container/bashbrew_output.json
-
           python valkey-release-automation/scripts/automate_website_description.py \
             ${{ inputs.version }} \
             valkey-io.github.io/templates/valkey-website-template.md \
-            valkey-container/bashbrew_output.json \
+            '${{ inputs.bashbrew_json }}' \
             valkey-io.github.io/content/download/releases
-          rm valkey-container/bashbrew_output.json
           cd valkey-io.github.io
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
