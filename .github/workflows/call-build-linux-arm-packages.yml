@@ -55,8 +55,8 @@ jobs:
         run: |
           MAJOR_MINOR=$(echo "${{ inputs.version }}" | cut -d. -f1,2)
           
-          if [[ $(echo "$MAJOR_MINOR >= 8.0" | bc -l) -eq 1 ]]; then
-            echo "Version $MAJOR_MINOR is 8.0 or higher, using USE_FAST_FLOAT"
+          if [[ "${{ inputs.version }}" == "unstable" ]] || [[ $(echo "$MAJOR_MINOR >= 8.1" | bc -l) -eq 1 ]]; then
+            echo "Version $MAJOR_MINOR is 8.1 or higher, using USE_FAST_FLOAT"
             make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
           else
             make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
