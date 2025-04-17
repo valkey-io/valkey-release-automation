@@ -52,7 +52,25 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
 
       - name: Make Valkey
-        run: make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+        run: |
+          set -euo pipefail
+          
+          VERSION="${{ inputs.version }}"
+          echo "Building for version: $VERSION"
+
+          if [[ "$VERSION" != "unstable" ]]; then
+            MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+            if [[ $(echo "$MAJOR_MINOR < 8.1" | bc -l) -eq 1 ]]; then
+              echo "Version $MAJOR_MINOR is less than 8.1 — no USE_FAST_FLOAT"
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+            else
+              echo "Version $MAJOR_MINOR is 8.1 or higher — enabling USE_FAST_FLOAT"
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+            fi
+          else
+            echo "Unstable version detected — enabling USE_FAST_FLOAT"
+            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+          fi
       
       - name: Create Tarball and SHA256sums
         run: |
