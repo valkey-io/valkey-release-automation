@@ -53,13 +53,23 @@ jobs:
 
       - name: Make Valkey
         run: |
-          MAJOR_MINOR=$(echo "${{ inputs.version }}" | cut -d. -f1,2)
+          set -euo pipefail
           
-          if [[ "${{ inputs.version }}" == "unstable" ]] || [[ $(echo "$MAJOR_MINOR >= 8.1" | bc -l) -eq 1 ]]; then
-            echo "Version $MAJOR_MINOR is 8.1 or higher, using USE_FAST_FLOAT"
-            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+          VERSION="${{ inputs.version }}"
+          echo "Building for version: $VERSION"
+
+          if [[ "$VERSION" != "unstable" ]]; then
+            MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+            if [[ $(echo "$MAJOR_MINOR < 8.1" | bc -l) -eq 1 ]]; then
+              echo "Version $MAJOR_MINOR is less than 8.1 — no USE_FAST_FLOAT"
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+            else
+              echo "Version $MAJOR_MINOR is 8.1 or higher — enabling USE_FAST_FLOAT"
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+            fi
           else
-            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+            echo "Unstable version detected — enabling USE_FAST_FLOAT"
+            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
           fi
       
       - name: Create Tarball and SHA256sums
