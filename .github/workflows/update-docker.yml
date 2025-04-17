@@ -25,14 +25,15 @@ jobs:
       - name: Set up bashbrew
         uses: docker-library/bashbrew@v0.1.12
       
-      - name: Check if bashbrew in installed
+      - name: Check if bashbrew is installed
         run: |
           bashbrew --version
 
-      - name: Checkout code
+      - name: Checkout valkey-container
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ github.repository_owner }}/valkey-container
+          path: valkey-container
           token: ${{ secrets.PAT_TOKEN }}
       
       - name: Strip patch version
@@ -53,6 +54,7 @@ jobs:
       
       - name: Update new version
         run: |
+            cd valkey-container
             # Download the scripts for bashbrew in local
             jqt='.jq-template.awk'
             wget -qO "$jqt" 'https://github.com/docker-library/bashbrew/raw/9f6a35772ac863a0241f147c820354e4008edf38/scripts/jq-template.awk'
@@ -61,18 +63,50 @@ jobs:
 
             # Run update script
             ./update.sh ${{ steps.strip_version.outputs.stripped_version }}
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .
+            git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Checkout valkey-release-automation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+
+      - name: Generate bashbrew output
+        id: generate-bashbrew
+        run: |
+          cd valkey-container
+          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.12/scripts
+          "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+
+      - name: Update Docker Description File
+        run: |
+          python valkey-release-automation/scripts/automate_docker_description.py valkey-container/bashbrew_output.json valkey-container/dockerhub-description-template.md valkey-container/dockerhub-description.md
+          rm valkey-container/bashbrew_output.json
+          cd valkey-container
+          git add .
+          git commit -m "Update tags in the docker description for version ${{ inputs.version }}" -s
 
       - name: Create Pull Request
+        id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
+          path: valkey-container
           branch: update-${{ inputs.version }}
-          commit-message: "Update to version ${{ inputs.version }}"
+          commit-message: "Preparing changes for version ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           delete-branch: true
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+          signoff: true
+          author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           title: "Update to version ${{ inputs.version }}"
           body: |
             This pull request updates the repository to version `${{ inputs.version }}`.
             Please review the changes and merge when appropriate.
-          
