@@ -72,7 +72,13 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add .
-            git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+            
+            # Only commit if there are changes
+            if ! git diff --cached --quiet; then
+              git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+            else
+              echo "No changes to commit."
+            fi
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -99,9 +105,28 @@ jobs:
           rm valkey-container/bashbrew_output.json
           cd valkey-container
           git add .
-          git commit -m "Update tags in the docker description for version ${{ inputs.version }}" -s
+          
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Update tags in the docker description for version ${{ inputs.version }}" -s
+          else
+            echo "No changes to commit in Docker description."
+          fi
+
+      - name: Check if any changes were committed
+        id: check_changes
+        run: |
+          cd valkey-container
+          if [ -n "$(git log origin/mainline..HEAD)" ]; then
+            echo "Changes detected."
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes detected."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Pull Request
+        if: steps.check_changes.outputs.has_changes == 'true'
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
