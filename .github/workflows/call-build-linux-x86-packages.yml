@@ -85,3 +85,27 @@ jobs:
 
       - name: Sync to S3
         run: aws s3 sync packages-files s3://${{ secrets.bucket_name }}/releases/
+
+      - name: Validate uploaded binaries to S3
+        run: |
+          mkdir -p validation
+          cd validation
+
+          # Download the uploaded tarball
+          TAR_FILE_NAME=valkey-${{inputs.version}}-${{matrix.distro.platform}}-${{ matrix.distro.arch}}
+          aws s3 cp s3://${{ secrets.bucket_name }}/releases/$TAR_FILE_NAME.tar.gz .
+          aws s3 cp s3://${{ secrets.bucket_name }}/releases/$TAR_FILE_NAME.tar.gz.sha256 .
+          
+          echo "Verifying SHA 256 checksum"
+          sha256sum -c $TAR_FILE_NAME.tar.gz.sha256
+          
+          echo "Extracting and validating binary"
+          tar xf $TAR_FILE_NAME.tar.gz
+          
+          # Check if binary exists and is executable
+          if [ ! -x "$TAR_FILE_NAME/bin/valkey-server" ]; then
+            echo "Error: valkey-server is not executable"
+            exit 1
+          fi
+        
+          echo "All validation checks passed successfully"
