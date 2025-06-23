@@ -77,7 +77,7 @@ jobs:
             if ! git diff --cached --quiet; then
               git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
             else
-              echo "No changes to commit."
+              echo "No changes to commit for version update - PR will not be created."
             fi
 
       - name: Setup Python
@@ -110,23 +110,10 @@ jobs:
           if ! git diff --cached --quiet; then
             git commit -m "Update tags in the docker description for version ${{ inputs.version }}" -s
           else
-            echo "No changes to commit in Docker description."
-          fi
-
-      - name: Check if any changes were committed
-        id: check_changes
-        run: |
-          cd valkey-container
-          if [ -n "$(git log origin/mainline..HEAD)" ]; then
-            echo "Changes detected."
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "No changes detected."
-            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit for Docker description - PR will not be created."
           fi
 
       - name: Create Pull Request
-        if: steps.check_changes.outputs.has_changes == 'true'
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
