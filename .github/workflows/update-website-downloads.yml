@@ -69,13 +69,15 @@ jobs:
           cd valkey-io.github.io
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add "content/download/releases/v${{ steps.format-version.outputs.version_dashed }}.md"
 
           # Only commit if there are changes
           if ! git diff --cached --quiet; then
-            git add "content/download/releases/v${{ steps.format-version.outputs.version_dashed }}.md"
             git commit -m "Update website for version ${{ inputs.version }}"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "No changes to commit for Docker Hub description - PR will not be created."
+            echo "No changes to commit for website update - PR will not be created."
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
