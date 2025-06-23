@@ -59,6 +59,7 @@ jobs:
         shell: bash
       
       - name: Update new version
+        id: version-update
         run: |
             cd valkey-container
             # Download the scripts for bashbrew in local
@@ -76,8 +77,10 @@ jobs:
             # Only commit if there are changes
             if ! git diff --cached --quiet; then
               git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+              echo "has_changes=true" >> $GITHUB_OUTPUT
             else
               echo "No changes to commit for version update - PR will not be created."
+              echo "has_changes=false" >> $GITHUB_OUTPUT
             fi
 
       - name: Setup Python
@@ -99,7 +102,8 @@ jobs:
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
           echo "bashbrew_content=$(cat bashbrew_output.json)" >> $GITHUB_OUTPUT
 
-      - name: Update Docker Description File
+      - name: Update Docker Hub Description File
+        id: dockerhub-description-update
         run: |
           python valkey-release-automation/scripts/automate_docker_description.py valkey-container/bashbrew_output.json valkey-container/dockerhub-description-template.md valkey-container/dockerhub-description.md
           rm valkey-container/bashbrew_output.json
@@ -108,12 +112,15 @@ jobs:
           
           # Only commit if there are changes
           if ! git diff --cached --quiet; then
-            git commit -m "Update tags in the docker description for version ${{ inputs.version }}" -s
+            git commit -m "Update Docker Hub description for version ${{ inputs.version }}" -s
+            echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "No changes to commit for Docker description - PR will not be created."
+            echo "No changes to commit for Docker Hub description - PR will not be created."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Create Pull Request
+        if: steps.dockerhub-description-update.outputs.has_changes == 'true' && steps.version-update.outputs.has_changes == 'true'
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
