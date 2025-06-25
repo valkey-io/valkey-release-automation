@@ -41,6 +41,18 @@ jobs:
           repository: ${{ github.repository_owner }}/valkey-container
           path: valkey-container
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Checkout valkey-release-automation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
       
       - name: Strip patch version
         id: strip_version
@@ -83,16 +95,24 @@ jobs:
               echo "has_changes=false" >> $GITHUB_OUTPUT
             fi
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
-      - name: Checkout valkey-release-automation
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/valkey-release-automation
-          path: valkey-release-automation
+      - name: Update container aliases
+        id: alias-update
+        run: |
+          cd valkey-container
+          python ../valkey-release-automation/scripts/automate_alias_update.py \
+            generate-stackbrew-library.sh \
+            ${{ inputs.version }}
+          
+          git add generate-stackbrew-library.sh
+          
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Update container aliases for version ${{ inputs.version }}" -s
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes to commit for aliases - no update needed."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Generate bashbrew output
         id: generate-bashbrew
@@ -120,7 +140,10 @@ jobs:
           fi
 
       - name: Create Pull Request
-        if: steps.dockerhub-description-update.outputs.has_changes == 'true' && steps.version-update.outputs.has_changes == 'true'
+        if: |
+          steps.version-update.outputs.has_changes == 'true' || 
+          steps.alias-update.outputs.has_changes == 'true' || 
+          steps.dockerhub-description-update.outputs.has_changes == 'true'
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
