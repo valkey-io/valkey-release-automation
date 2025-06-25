@@ -110,7 +110,7 @@ jobs:
             git commit -m "Update container aliases for version ${{ inputs.version }}" -s
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "No changes to commit for aliases - no update needed."
+            echo "No changes to commit for aliases - PR will not be created."
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
