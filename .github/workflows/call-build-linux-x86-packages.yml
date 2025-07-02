@@ -37,9 +37,9 @@ jobs:
       matrix: ${{ fromJSON(inputs.build_matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: valkey-io/valkey
+          repository: ${{ github.repository_owner }}/valkey
           ref: ${{ inputs.version }}
 
       - name: Configure AWS credentials
@@ -86,26 +86,62 @@ jobs:
       - name: Sync to S3
         run: aws s3 sync packages-files s3://${{ secrets.bucket_name }}/releases/
 
-      - name: Validate uploaded binaries to S3
+  test-binaries:
+    name: Test the binaries that were uploaded to S3 - ${{ matrix.distro.platform }}-${{ matrix.distro.arch }}
+    runs-on: ${{ matrix.distro.target }}
+    needs: build-valkey
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.build_matrix) }}
+    steps:
+      - name: Checkout Valkey
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey
+          ref: ${{ inputs.version }}
+          
+      - name: Install all dependencies required for testing
         run: |
-          mkdir -p validation
-          cd validation
+          sudo apt-get update
+          sudo apt-get install -y \
+          build-essential \
+          tcl \
+          tcl-tls \
+          python3 \
+          libssl-dev \
+          bc \
+          curl
+          
+      - name: Download and validate the binaries from the S3 buckets
+        run: |
+          mkdir -p ./downloaded-x86-binaries
+          cd ./downloaded-x86-binaries
+          
+          TAR_FILE_NAME="valkey-${{ inputs.version }}-${{ matrix.distro.platform }}-${{ matrix.distro.arch }}"
 
-          # Download the uploaded tarball
-          TAR_FILE_NAME=valkey-${{inputs.version}}-${{matrix.distro.platform}}-${{ matrix.distro.arch}}
-          aws s3 cp s3://${{ secrets.bucket_name }}/releases/$TAR_FILE_NAME.tar.gz .
-          aws s3 cp s3://${{ secrets.bucket_name }}/releases/$TAR_FILE_NAME.tar.gz.sha256 .
+          sleep 30
           
-          echo "Verifying SHA 256 checksum"
+          curl -fsSL -o $TAR_FILE_NAME.tar.gz "https://download.valkey.io/releases/$TAR_FILE_NAME.tar.gz"
+          curl -fsSL -o $TAR_FILE_NAME.tar.gz.sha256 "https://download.valkey.io/releases/$TAR_FILE_NAME.tar.gz.sha256"
+          
           sha256sum -c $TAR_FILE_NAME.tar.gz.sha256
+          tar -xzf $TAR_FILE_NAME.tar.gz
           
-          echo "Extracting and validating binary"
-          tar xf $TAR_FILE_NAME.tar.gz
-          
-          # Check if binary exists and is executable
           if [ ! -x "$TAR_FILE_NAME/bin/valkey-server" ]; then
-            echo "Error: valkey-server is not executable"
-            exit 1
+              echo "valkey-server not found or not executable"
+              exit 1
           fi
-        
-          echo "All validation checks passed successfully"
+          
+          echo "$(pwd)/$TAR_FILE_NAME/bin" >> $GITHUB_PATH
+
+      - name: Run main Valkey test suite
+        run: timeout 60m make test
+
+      - name: Run Valkey Cluster tests
+        run: timeout 20m make test-cluster
+
+      - name: Run Valkey Sentinel tests  
+        run: timeout 20m make test-sentinel
+
+      - name: Run Valkey module tests
+        run: timeout 20m make test-modules
