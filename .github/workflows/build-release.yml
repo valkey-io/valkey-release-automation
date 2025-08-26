@@ -33,6 +33,8 @@ jobs:
     outputs:
       version: ${{ steps.process-inputs.outputs.version }}
       environment: ${{ steps.process-inputs.outputs.environment }}
+      trigger_bundle: ${{ steps.process-inputs.outputs.trigger_bundle }}
+
     steps:
       - name: Process and validate inputs
         id: process-inputs
@@ -66,9 +68,25 @@ jobs:
             exit 1
           fi
 
+          TRIGGER_BUNDLE="false"
+
+          if [[ "$VERSION" != "unstable" ]]; then
+            VERSION_DIGITS=$(echo "$VERSION" | sed 's/-rc[0-9]*$//')
+            MAJOR=$(echo "$VERSION_DIGITS" | cut -d. -f1)
+            MINOR=$(echo "$VERSION_DIGITS" | cut -d. -f2)
+            
+            # Check if version is >= 8.1.0
+            if [[ "$MAJOR" -gt 8 ]] || [[ "$MAJOR" -eq 8 && "$MINOR" -ge 1 ]]; then
+              TRIGGER_BUNDLE="true"
+            else
+              echo "Version $VERSION is < 8.1.0 which is incompatible with Valkey Bundle so we won't trigger the Bundle release"
+            fi
+          fi
+          
           # Output validated variables
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "trigger_bundle=$TRIGGER_BUNDLE" >> $GITHUB_OUTPUT
 
   update-valkey-hashes:
     needs:
@@ -154,6 +172,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Valkey Bundle Update
+        if: needs.process-inputs.outputs.trigger_bundle == 'true'
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
         with:
           token: ${{ secrets.AUTOMATION_PAT }}
