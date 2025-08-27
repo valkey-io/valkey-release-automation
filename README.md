@@ -12,7 +12,7 @@ This automation is triggered upon the publication of a new release in the [Valke
 
 This guide describes the steps to set up authentication tokens required for the post-release tasks in Valkey.
 
-## 1. Set up a PAT Token in Github Secrets
+## 1. Set up a PAT Token in GitHub Secrets
 Create a Personal Access Token (PAT) with the following permissions:
 - **Actions:** Read and Write (To trigger and interact with github actions)
 - **Contents:** Read and Write (To access repository contents and modify them)
