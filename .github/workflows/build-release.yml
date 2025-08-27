@@ -71,9 +71,9 @@ jobs:
           TRIGGER_BUNDLE="false"
 
           if [[ "$VERSION" != "unstable" ]]; then
-            VERSION_DIGITS=$(echo "$VERSION" | sed 's/-rc[0-9]*$//')
-            MAJOR=$(echo "$VERSION_DIGITS" | cut -d. -f1)
-            MINOR=$(echo "$VERSION_DIGITS" | cut -d. -f2)
+            VERSION_WITHOUT_RC=$(echo "$VERSION" | sed 's/-rc[0-9]*$//')
+            MAJOR=$(echo "$VERSION_WITHOUT_RC" | cut -d. -f1)
+            MINOR=$(echo "$VERSION_WITHOUT_RC" | cut -d. -f2)
             
             # Check if version is >= 8.1.0
             if [[ "$MAJOR" -gt 8 ]] || [[ "$MAJOR" -eq 8 && "$MINOR" -ge 1 ]]; then
