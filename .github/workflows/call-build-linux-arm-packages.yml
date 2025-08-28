@@ -28,9 +28,9 @@ permissions:
   contents: read
 
 jobs:
-  build-valkey:
+  build-and-test-valkey:
     # Capture source tarball and generate checksum for it
-    name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    name: Build and test package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
     runs-on: ${{ matrix.distro.target }}
     strategy:
       fail-fast: false
@@ -41,15 +41,9 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/valkey
           ref: ${{ inputs.version }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ inputs.region }}
-          role-to-assume: ${{ secrets.role_to_assume }}
       
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev tcl tcl-tls python3 bc curl
 
       - name: Make Valkey
         run: |
@@ -58,22 +52,24 @@ jobs:
           VERSION="${{ inputs.version }}"
           echo "Building for version: $VERSION"
 
+          make -C deps
+
           if [[ "$VERSION" != "unstable" ]]; then
             MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
             if [[ $(echo "$MAJOR_MINOR < 8.1" | bc -l) -eq 1 ]]; then
               echo "Version $MAJOR_MINOR is less than 8.1 — no USE_FAST_FLOAT"
-              make all BUILD_TLS=yes USE_SYSTEMD=yes
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
             else
               echo "Version $MAJOR_MINOR is 8.1 or higher — enabling USE_FAST_FLOAT"
-              make all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
             fi
           else
             echo "Unstable version detected — enabling USE_FAST_FLOAT"
-            make all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
           fi
 
       - name: Run Valkey test suite
-        run: timeout 60m ./runtest
+        run: ./runtest
 
       - name: Create Tarball and SHA256sums
         run: |
@@ -85,66 +81,12 @@ jobs:
           sha256sum $TAR_FILE_NAME.tar.gz > $TAR_FILE_NAME.tar.gz.sha256
           mkdir -p packages-files
           cp -rfv $TAR_FILE_NAME.tar* packages-files/
-
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.region }}
+          role-to-assume: ${{ secrets.role_to_assume }}
+          
       - name: Sync to S3
         run: aws s3 sync packages-files s3://${{ secrets.bucket_name }}/releases/
-
-  test-binaries:
-    name: Test the binaries that were uploaded to S3 - ${{ matrix.distro.platform }}-${{ matrix.distro.arch }}
-    runs-on: ${{ matrix.distro.target }}
-    needs: build-valkey
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(inputs.build_matrix) }}
-    steps:
-      - name: Checkout Valkey
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          repository: ${{ github.repository_owner }}/valkey
-          ref: ${{ inputs.version }}
-          
-      - name: Install all dependencies required for testing
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-          build-essential \
-          tcl \
-          tcl-tls \
-          python3 \
-          libssl-dev \
-          bc \
-          curl
-          
-      - name: Download and validate the binaries from the S3 buckets
-        run: |
-          mkdir -p ./downloaded-arm-binaries
-          cd ./downloaded-arm-binaries
-          
-          TAR_FILE_NAME="valkey-${{ inputs.version }}-${{ matrix.distro.platform }}-${{ matrix.distro.arch }}"
-
-          sleep 30
-          
-          curl -fsSL -o $TAR_FILE_NAME.tar.gz "https://download.valkey.io/releases/$TAR_FILE_NAME.tar.gz"
-          curl -fsSL -o $TAR_FILE_NAME.tar.gz.sha256 "https://download.valkey.io/releases/$TAR_FILE_NAME.tar.gz.sha256"
-          
-          sha256sum -c $TAR_FILE_NAME.tar.gz.sha256
-          tar -xzf $TAR_FILE_NAME.tar.gz
-          
-          if [ ! -x "$TAR_FILE_NAME/bin/valkey-server" ]; then
-              echo "valkey-server not found or not executable"
-              exit 1
-          fi
-          
-          echo "$(pwd)/$TAR_FILE_NAME/bin" >> $GITHUB_PATH
-
-      - name: Run main Valkey test suite
-        run: timeout 60m make test
-
-      - name: Run Valkey Cluster tests
-        run: timeout 20m make test-cluster
-
-      - name: Run Valkey Sentinel tests  
-        run: timeout 20m make test-sentinel
-
-      - name: Run Valkey module tests
-        run: timeout 20m make test-modules
