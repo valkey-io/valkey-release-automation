@@ -35,6 +35,12 @@ jobs:
         run: |
           bashbrew --version
 
+      - name: Checkout valkey-release-automation
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+
       - name: Checkout valkey-container
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
@@ -78,12 +84,6 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.x'
-
-      - name: Checkout valkey-release-automation
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/valkey-release-automation
-          path: valkey-release-automation
 
       - name: Generate bashbrew output
         id: generate-bashbrew
