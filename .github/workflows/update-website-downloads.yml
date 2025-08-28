@@ -56,19 +56,31 @@ jobs:
           echo "version_dashed=$VERSION_DASHED" >> $GITHUB_OUTPUT
 
       - name: Update Website Release File
+        id: update-website
         run: |
           python valkey-release-automation/scripts/automate_website_description.py \
             ${{ inputs.version }} \
             valkey-io.github.io/templates/valkey-website-template.md \
             '${{ inputs.bashbrew_json }}' \
             valkey-io.github.io/content/download/releases
+
           cd valkey-io.github.io
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          
           git add "content/download/releases/v${{ steps.format-version.outputs.version_dashed }}.md"
-          git commit -m "Update website for version ${{ inputs.version }}"
+
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Update website for version ${{ inputs.version }}"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes to commit for website update - PR will not be created."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Pull Request
+        if: steps.update-website.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
