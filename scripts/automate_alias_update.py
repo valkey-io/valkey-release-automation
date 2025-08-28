@@ -10,6 +10,10 @@ def parse_version(version: str) -> Tuple[int, int]:
     return int(parts[0]), int(parts[1])
     
 def update_aliases_dict(new_version: str, aliases: Dict[str, str]) -> Dict[str, str]:
+    # Never update aliases for RC versions
+    if "-rc" in new_version:
+        return aliases
+        
     new_major, new_minor = parse_version(new_version)
     new_key = f"{new_major}.{new_minor}"
         
