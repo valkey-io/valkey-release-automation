@@ -52,8 +52,6 @@ jobs:
           VERSION="${{ inputs.version }}"
           echo "Building for version: $VERSION"
 
-          make -C deps
-
           if [[ "$VERSION" != "unstable" ]]; then
             MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
             if [[ $(echo "$MAJOR_MINOR < 8.1" | bc -l) -eq 1 ]]; then
