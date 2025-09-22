@@ -49,9 +49,7 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           if [[ "$VERSION" == *"-rc"* ]]; then
-            # For RC versions, remove the RC part
-            VERSION_BASE=${VERSION%-rc*}
-            VERSION_DASHED=${VERSION_BASE//./-}
+            VERSION_DASHED=${VERSION//./-}
           else
             VERSION_DASHED=${VERSION//./-}
           fi

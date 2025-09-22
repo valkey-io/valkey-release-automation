@@ -28,28 +28,22 @@ permissions:
   contents: read
 
 jobs:
-  build-valkey:
+  build-and-test-valkey:
     # Capture source tarball and generate checksum for it
-    name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    name: Build and test package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
     runs-on: ${{ matrix.distro.target }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.build_matrix) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          repository: valkey-io/valkey
+          repository: ${{ github.repository_owner }}/valkey
           ref: ${{ inputs.version }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ inputs.region }}
-          role-to-assume: ${{ secrets.role_to_assume }}
-
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev tcl tcl-tls python3 bc curl
 
       - name: Make Valkey
         run: |
@@ -71,6 +65,9 @@ jobs:
             echo "Unstable version detected — enabling USE_FAST_FLOAT"
             make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
           fi
+
+      - name: Run Valkey test suite
+        run: ./runtest
       
       - name: Create Tarball and SHA256sums
         run: |
@@ -82,6 +79,12 @@ jobs:
           sha256sum $TAR_FILE_NAME.tar.gz > $TAR_FILE_NAME.tar.gz.sha256
           mkdir -p packages-files
           cp -rfv $TAR_FILE_NAME.tar* packages-files/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.region }}
+          role-to-assume: ${{ secrets.role_to_assume }}
 
       - name: Sync to S3
         run: aws s3 sync packages-files s3://${{ secrets.bucket_name }}/releases/

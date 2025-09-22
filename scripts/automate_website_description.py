@@ -44,9 +44,7 @@ def update_website_release(version: str, template_file: str, bashbrew_json: str,
 
         is_rc = "-rc" in version
         if is_rc:
-            base_version = version.split("-rc")[0]
-            base_version_dashed = base_version.replace(".", "-")
-            file_path = f"{output_path}/v{base_version_dashed}.md"
+            file_path = f"{output_path}/v{version.replace('.', '-')}.md"
         else:
             version_dashed = version.replace(".", "-")
             file_path = f"{output_path}/v{version_dashed}.md"
