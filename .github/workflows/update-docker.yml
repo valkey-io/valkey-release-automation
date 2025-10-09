@@ -47,6 +47,18 @@ jobs:
           repository: ${{ github.repository_owner }}/valkey-container
           path: valkey-container
           token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Checkout valkey-release-automation
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
       
       - name: Strip patch version
         id: strip_version
@@ -65,6 +77,7 @@ jobs:
         shell: bash
       
       - name: Update new version
+        id: version-update
         run: |
             cd valkey-container
             # Download the scripts for bashbrew in local
@@ -78,12 +91,34 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add .
-            git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+            
+            # Only commit if there are changes
+            if ! git diff --cached --quiet; then
+              git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+              echo "has_changes=true" >> $GITHUB_OUTPUT
+            else
+              echo "No changes to commit for version update - PR will not be created."
+              echo "has_changes=false" >> $GITHUB_OUTPUT
+            fi
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
+      - name: Update container aliases
+        id: alias-update
+        run: |
+          cd valkey-container
+          python ../valkey-release-automation/scripts/automate_alias_update.py \
+            generate-stackbrew-library.sh \
+            ${{ inputs.version }}
+          
+          git add generate-stackbrew-library.sh
+          
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Update container aliases for version ${{ inputs.version }}" -s
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes to commit for aliases - PR will not be created."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Generate bashbrew output
         id: generate-bashbrew
@@ -93,15 +128,28 @@ jobs:
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
           echo "bashbrew_content=$(cat bashbrew_output.json)" >> $GITHUB_OUTPUT
 
-      - name: Update Docker Description File
+      - name: Update Docker Hub Description File
+        id: dockerhub-description-update
         run: |
           python valkey-release-automation/scripts/automate_docker_description.py valkey-container/bashbrew_output.json valkey-container/dockerhub-description-template.md valkey-container/dockerhub-description.md
           rm valkey-container/bashbrew_output.json
           cd valkey-container
           git add .
-          git commit -m "Update tags in the docker description for version ${{ inputs.version }}" -s
+          
+          # Only commit if there are changes
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Docker Hub description for version ${{ inputs.version }}" -s
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "No changes to commit for Docker Hub description - PR will not be created."
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Create Pull Request
+        if: |
+          steps.version-update.outputs.has_changes == 'true' || 
+          steps.alias-update.outputs.has_changes == 'true' || 
+          steps.dockerhub-description-update.outputs.has_changes == 'true'
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
