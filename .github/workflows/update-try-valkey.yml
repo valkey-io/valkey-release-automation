@@ -1,0 +1,209 @@
+name: Build Try Valkey Image
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version of Valkey to create.
+        type: string
+        required: true
+      region:
+        description: The AWS region to upload the packages to.
+        type: string
+        required: true
+    secrets:
+      bucket_name:
+        description: The name of the S3 bucket to upload the packages to.
+        required: true
+      role_to_assume:
+        description: The role to assume for the S3 bucket.
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version of Valkey to create.
+        type: string
+        required: true
+      region:
+        description: The AWS region to upload the packages to.
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  update-try-valkey:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+            echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
+            exit 1
+          fi
+          echo "Version validation passed: ${{ inputs.version }}"
+
+      - name: Setup Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Checkout valkey-try-me repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-try-me
+          path: valkey-try-me
+
+      - name: Checkout valkey-hashes repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-hashes
+          path: valkey-hashes
+
+      - name: Extract Valkey download info
+        id: extract-info
+        run: |
+          VERSION="${{ inputs.version }}"
+          
+          # Skip hash extraction for unstable
+          if [[ "$VERSION" == "unstable" ]]; then
+            echo "download_url=https://github.com/valkey-io/valkey/archive/refs/heads/unstable.tar.gz" >> $GITHUB_OUTPUT
+            echo "download_sha=skip" >> $GITHUB_OUTPUT
+          else
+            # Extract download URL and SHA from valkey-hashes
+            HASH_LINE=$(grep "valkey-${VERSION}.tar.gz" valkey-hashes/README || echo "")
+            
+            if [[ -z "$HASH_LINE" ]]; then
+              echo "Error: Hash not found for version ${VERSION} in valkey-hashes repository"
+              echo "Available versions:"
+              grep "valkey-" valkey-hashes/README | head -5 || echo "No versions found"
+              exit 1
+            fi
+            
+            # Parse: hash valkey-X.Y.Z.tar.gz sha256 HASH_VALUE URL
+            DOWNLOAD_SHA=$(echo "$HASH_LINE" | awk '{print $4}')
+            DOWNLOAD_URL=$(echo "$HASH_LINE" | awk '{print $5}')
+            
+            if [[ -z "$DOWNLOAD_SHA" || -z "$DOWNLOAD_URL" ]]; then
+              echo "Error: Failed to extract SHA or URL from hash line: $HASH_LINE"
+              exit 1
+            fi
+            
+            echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+            echo "download_sha=$DOWNLOAD_SHA" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "Download info extracted successfully"
+
+      - name: Install Try Valkey prerequisites
+        working-directory: valkey-try-me
+        run: |
+          # Create and activate virtual environment
+          python3 -m venv venv
+          source venv/bin/activate
+          
+          # Install dependencies
+          pip install -r requirements.txt
+          
+          # Install Playwright browser
+          playwright install chromium
+          
+          echo "Prerequisites installed successfully"
+
+      - name: Build Try Valkey image
+        working-directory: valkey-try-me
+        run: |
+          # Activate virtual environment
+          source venv/bin/activate
+          
+          # Run automated build
+          MODE=local AUTO_SAVE_STATE=true \
+          VALKEY_VERSION="${{ inputs.version }}" \
+          VALKEY_DOWNLOAD_URL="${{ steps.extract-info.outputs.download_url }}" \
+          VALKEY_DOWNLOAD_SHA="${{ steps.extract-info.outputs.download_sha }}" \
+          ./src/build.sh
+          
+          echo "Build completed successfully"
+
+      - name: Verify generated files
+        working-directory: valkey-try-me
+        run: |
+          VERSION="${{ inputs.version }}"
+          
+          echo "Verifying generated files for version: $VERSION"
+          
+          # Check filesystem files
+          if [[ -f "$VERSION/fs/alpine-fs.json" ]]; then
+            echo "alpine-fs.json found ($(du -h "$VERSION/fs/alpine-fs.json" | cut -f1))"
+          else
+            echo "alpine-fs.json missing"
+            exit 1
+          fi
+          
+          if [[ -d "$VERSION/fs/alpine-rootfs-flat" ]]; then
+            FILE_COUNT=$(ls -1 "$VERSION/fs/alpine-rootfs-flat" | wc -l)
+            echo "alpine-rootfs-flat directory found ($FILE_COUNT files)"
+          else
+            echo "alpine-rootfs-flat directory missing"
+            exit 1
+          fi
+          
+          # Check state file
+          STATE_FILES=($(ls "$VERSION/states/"*.gz 2>/dev/null || true))
+          if [[ ${#STATE_FILES[@]} -gt 0 ]]; then
+            for state_file in "${STATE_FILES[@]}"; do
+              SIZE=$(du -h "$state_file" | cut -f1)
+              echo "State file found: $(basename "$state_file") ($SIZE)"
+            done
+          else
+            echo "No compressed state files found"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.role_to_assume || secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Upload files to S3
+        working-directory: valkey-try-me
+        run: |
+          VERSION="${{ inputs.version }}"
+          BUCKET="${{ secrets.bucket_name || secrets.AWS_S3_BUCKET }}"
+          
+          echo "Uploading files to S3 bucket: $BUCKET"
+          
+          # Upload filesystem files
+          aws s3 cp "$VERSION/fs/alpine-fs.json" "s3://$BUCKET/try-me-valkey/$VERSION/fs/alpine-fs.json"
+          
+          # Upload rootfs-flat directory
+          aws s3 sync "$VERSION/fs/alpine-rootfs-flat/" "s3://$BUCKET/try-me-valkey/$VERSION/fs/alpine-rootfs-flat/" --delete
+          
+          # Upload state file
+          aws s3 cp "$VERSION/states/state.bin.gz" "s3://$BUCKET/try-me-valkey/$VERSION/states/state.bin.gz"
+          
+          echo "Files uploaded successfully to S3"
+
+
+      - name: Output summary
+        run: |
+          echo "## Try Valkey Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ inputs.region }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **S3 Bucket**: ${{ secrets.bucket_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Download URL**: ${{ steps.extract-info.outputs.download_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Generated Files:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`s3://${{ secrets.bucket_name }}/try-me-valkey/${{ inputs.version }}/fs/alpine-fs.json\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`s3://${{ secrets.bucket_name }}/try-me-valkey/${{ inputs.version }}/fs/alpine-rootfs-flat/\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`s3://${{ secrets.bucket_name }}/try-me-valkey/${{ inputs.version }}/states/state.bin.gz\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "The Try Valkey binaries have been built and uploaded to S3. To update the website, run the \`Update Website Downloads\` workflow with the appropriate parameters." >> $GITHUB_STEP_SUMMARY
