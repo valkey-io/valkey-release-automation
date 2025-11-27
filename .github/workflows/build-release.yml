@@ -152,11 +152,25 @@ jobs:
       bucket_name: ${{ needs.process-inputs.outputs.environment == 'dev' && secrets.AWS_TEST_BUCKET || secrets.AWS_S3_BUCKET }}
       role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
+  update-try-valkey:
+    needs:
+      - process-inputs
+      - update-valkey-hashes
+    if: needs.process-inputs.outputs.environment == 'prod'
+    uses: ./.github/workflows/update-try-valkey.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+      region: us-west-2
+    secrets:
+      bucket_name: ${{ secrets.AWS_S3_BUCKET }}
+      role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+
   update-website-downloads:
     needs:
       - process-inputs
       - update-valkey-hashes
       - update-docker
+      - update-try-valkey
     if: needs.process-inputs.outputs.environment == 'prod'
     uses: ./.github/workflows/update-website-downloads.yml
     with:
