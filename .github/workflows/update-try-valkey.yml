@@ -34,73 +34,72 @@ permissions:
   contents: read
 
 jobs:
-  update-try-valkey:
+  build-try-valkey:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate inputs
-        run: |
-          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
-            echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
-            exit 1
-          fi
-          echo "Version validation passed: ${{ inputs.version }}"
-
-      - name: Setup Docker
-        uses: docker/setup-buildx-action@v3
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.x'
+          python-version: '3.8'
+
+      - name: Checkout automation scripts
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+
+      - name: Validate inputs
+        id: validate-inputs
+        run: |
+          SHOULD_BUILD="true"
+
+          # Validate version format
+          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+              echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
+              exit 1
+          fi
+
+          # Skip RC and unstable builds
+          if [[ "${{ inputs.version }}" == *"-rc"* ]]; then
+              echo "Skipping Try Valkey build for RC version"
+              SHOULD_BUILD="false"
+          elif [[ "${{ inputs.version }}" == "unstable" ]]; then
+              echo "Skipping Try Valkey build for unstable version"
+              SHOULD_BUILD="false"
+          else
+              # Check if version is the newest 
+              cd valkey-release-automation/scripts
+              if python3 check_new_version.py "${{ inputs.version }}"; then
+                  SHOULD_BUILD="true"
+                  echo "Version validation passed: ${{ inputs.version }}"
+              else
+                  echo "Not the newest version, skipping Try Valkey update"
+                  SHOULD_BUILD="false"
+              fi
+          fi
+
+          echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
+
+      - name: Setup Docker
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
 
       - name: Checkout valkey-try-me repository
+        if: steps.validate-inputs.outputs.should_build == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ github.repository_owner }}/valkey-try-me
           path: valkey-try-me
 
       - name: Checkout valkey-hashes repository
+        if: steps.validate-inputs.outputs.should_build == 'true'
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ github.repository_owner }}/valkey-hashes
           path: valkey-hashes
 
-      - name: Extract Valkey download info
-        id: extract-info
-        run: |
-          VERSION="${{ inputs.version }}"
-          
-          # Skip hash extraction for unstable
-          if [[ "$VERSION" == "unstable" ]]; then
-            echo "download_url=https://github.com/valkey-io/valkey/archive/refs/heads/unstable.tar.gz" >> $GITHUB_OUTPUT
-            echo "download_sha=skip" >> $GITHUB_OUTPUT
-          else
-            # Extract download URL and SHA from valkey-hashes
-            HASH_LINE=$(grep "valkey-${VERSION}.tar.gz" valkey-hashes/README || echo "")
-            
-            if [[ -z "$HASH_LINE" ]]; then
-              echo "Error: Hash not found for version ${VERSION} in valkey-hashes repository"
-              echo "Available versions:"
-              grep "valkey-" valkey-hashes/README | head -5 || echo "No versions found"
-              exit 1
-            fi
-            
-            # Parse: hash valkey-X.Y.Z.tar.gz sha256 HASH_VALUE URL
-            DOWNLOAD_SHA=$(echo "$HASH_LINE" | awk '{print $4}')
-            DOWNLOAD_URL=$(echo "$HASH_LINE" | awk '{print $5}')
-            
-            if [[ -z "$DOWNLOAD_SHA" || -z "$DOWNLOAD_URL" ]]; then
-              echo "Error: Failed to extract SHA or URL from hash line: $HASH_LINE"
-              exit 1
-            fi
-            
-            echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
-            echo "download_sha=$DOWNLOAD_SHA" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "Download info extracted successfully"
-
       - name: Install Try Valkey prerequisites
+        if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
         run: |
           # Create and activate virtual environment
@@ -115,7 +114,22 @@ jobs:
           
           echo "Prerequisites installed successfully"
 
+      - name: Extract Valkey download info
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        id: extract-info
+        run: |
+          # Use the Python script to extract download information
+          OUTPUT=$(python3 valkey-release-automation/scripts/extract_hashes_info.py "${{ inputs.version }}" valkey-hashes)
+          DOWNLOAD_SHA=$(echo "$OUTPUT" | cut -d' ' -f1)
+          DOWNLOAD_URL=$(echo "$OUTPUT" | cut -d' ' -f2)
+          
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "download_sha=$DOWNLOAD_SHA" >> $GITHUB_OUTPUT
+          
+          echo "Download info extracted successfully"
+
       - name: Build Try Valkey image
+        if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
         run: |
           # Activate virtual environment
@@ -131,6 +145,7 @@ jobs:
           echo "Build completed successfully"
 
       - name: Verify generated files
+        if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
         run: |
           VERSION="${{ inputs.version }}"
@@ -166,12 +181,14 @@ jobs:
           fi
 
       - name: Configure AWS credentials
+        if: steps.validate-inputs.outputs.should_build == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.role_to_assume || secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ inputs.region }}
 
       - name: Upload files to S3
+        if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
         run: |
           VERSION="${{ inputs.version }}"
@@ -192,6 +209,7 @@ jobs:
 
 
       - name: Output summary
+        if: steps.validate-inputs.outputs.should_build == 'true'
         run: |
           echo "## Try Valkey Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
