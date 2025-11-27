@@ -72,7 +72,7 @@ jobs:
 
           # Only commit if there are changes
           if ! git diff --cached --quiet; then
-            git commit -m "Update website release file for version ${{ inputs.version }}"
+            git commit -m "Updates downloads section for version ${{ inputs.version }}"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
             echo "No changes to commit for website update"
@@ -81,6 +81,7 @@ jobs:
 
       - name: Update Try Valkey website
         id: update-try-valkey
+        if: contains(inputs.version, '-rc') == false
         working-directory: valkey-io.github.io
         run: |
           VERSION="${{ inputs.version }}"
@@ -128,6 +129,6 @@ jobs:
             
             Changes:
             - Updated downloads page with new release information
-            - Updated Try Valkey page to use version ${{ inputs.version }}
+            ${{ steps.update-try-valkey.outputs.has_try_valkey_changes == 'true' && format('- Updated Try Valkey page to use version {0}', inputs.version) || '' }}
 
             Please review the changes and merge when appropriate.
