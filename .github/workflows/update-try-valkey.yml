@@ -67,14 +67,14 @@ jobs:
               echo "Skipping Try Valkey build for unstable version"
               SHOULD_BUILD="false"
           else
-              # Check if version is the newest 
-              cd valkey-release-automation/scripts
-              if python3 check_new_version.py "${{ inputs.version }}"; then
+              # Check if version is the newest
+              LATEST_VERSION=$(gh release list --repo valkey-io/valkey --exclude-pre-releases --json tagName --jq '.[].tagName' | sort -V | tail -n1)
+              if [[ "$(printf '%s\n%s\n' "$LATEST_VERSION" "${{ inputs.version }}" | sort -V | head -n1)" == "$LATEST_VERSION" ]]; then
                   SHOULD_BUILD="true"
-                  echo "Version validation passed: ${{ inputs.version }}"
+                  echo "Version validation passed: ${{ inputs.version }} >= $LATEST_VERSION"
               else
-                  echo "Not the newest version, skipping Try Valkey update"
                   SHOULD_BUILD="false"
+                  echo "Not the newest version: ${{ inputs.version }} < $LATEST_VERSION"
               fi
           fi
 
