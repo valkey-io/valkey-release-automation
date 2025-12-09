@@ -4,23 +4,37 @@ Version utilities for Valkey version checking.
 Provides functions to find the latest Valkey version and compare versions.
 """
 
-import urllib.request
-import json
+import logging
+import subprocess
 import sys
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def find_latest_version() -> str:
     """
-    Find the latest Valkey version from GitHub releases.
+    Find the latest Valkey version from GitHub releases using GitHub CLI.
+    Uses version sorting to get the highest version number, not just the most recent release.
     
     Returns:
         str: The latest version number (e.g., "9.0.0")
     """
-    api_url = "https://api.github.com/repos/valkey-io/valkey/releases/latest"
+    # Use the GitHub CLI with version sorting to get the highest released version
+    cmd = "gh release list --repo valkey-io/valkey --exclude-pre-releases --json tagName --jq '.[].tagName' | sort -V | tail -n1"
     
-    with urllib.request.urlopen(api_url, timeout=10) as response:
-        data = json.loads(response.read().decode('utf-8'))
-        return data['tag_name']
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()
+        
+    except Exception as e:
+        logging.error(f"Failed to fetch latest version: {e}")
+        sys.exit(1)
 
 
 def compare_version(version1: str, version2: str) -> int:
@@ -56,7 +70,7 @@ def compare_version(version1: str, version2: str) -> int:
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python version_utils.py <version>")
+        logging.error("Usage: python check_new_version.py <version>")
         sys.exit(1)
     
     given_version = sys.argv[1]

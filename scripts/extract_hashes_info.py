@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+import logging
 import sys
 import os
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def extract_valkey_info(version, repo_path):
     readme_path = os.path.join(repo_path, "README")
@@ -17,7 +20,7 @@ def extract_valkey_info(version, repo_path):
                 break
     
     if not hash_line:
-        print(f"Error: Hash not found for version {version} in valkey-hashes repository")
+        logging.error(f"Hash not found for version {version} in valkey-hashes repository")
         raise ValueError(f"Hash not found for version {version}")
 
     # Parse the line: hash valkey-X.Y.Z.tar.gz sha256 HASH_VALUE URL
@@ -29,7 +32,7 @@ def extract_valkey_info(version, repo_path):
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: extract_hashes_info.py <version> <repo_path>")
+        logging.error("Usage: extract_hashes_info.py <version> <repo_path>")
         sys.exit(1)
     sha, url = extract_valkey_info(sys.argv[1], sys.argv[2])
     print(f"{sha} {url}")
