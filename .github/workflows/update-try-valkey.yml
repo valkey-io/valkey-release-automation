@@ -184,7 +184,7 @@ jobs:
         if: steps.validate-inputs.outputs.should_build == 'true'
         uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
         with:
-          role-to-assume: ${{ secrets.role_to_assume || secrets.AWS_ROLE_TO_ASSUME }}
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ inputs.region }}
 
       - name: Upload files to S3
