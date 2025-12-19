@@ -161,9 +161,7 @@ jobs:
     with:
       version: ${{ needs.process-inputs.outputs.version }}
       region: us-west-2
-    secrets:
-      bucket_name: ${{ secrets.AWS_S3_BUCKET }}
-      role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+    secrets: inherit
 
   update-website-downloads:
     needs:
@@ -176,6 +174,7 @@ jobs:
     with:
       version: ${{ needs.process-inputs.outputs.version }}
       bashbrew_json: ${{ needs.update-docker.outputs.bashbrew_output }}
+      try_valkey_uploaded: ${{ needs.update-try-valkey.outputs.try_valkey_uploaded }}
     secrets:
       PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
 

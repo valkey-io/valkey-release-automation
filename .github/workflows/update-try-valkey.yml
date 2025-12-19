@@ -11,13 +11,10 @@ on:
         description: The AWS region to upload the packages to.
         type: string
         required: true
-    secrets:
-      bucket_name:
-        description: The name of the S3 bucket to upload the packages to.
-        required: true
-      role_to_assume:
-        description: The role to assume for the S3 bucket.
-        required: true
+    outputs:
+      try_valkey_uploaded:
+        description: Whether try-valkey files were uploaded to S3
+        value: ${{ jobs.build-try-valkey.outputs.try_valkey_uploaded }}
   workflow_dispatch:
     inputs:
       version:
@@ -36,6 +33,8 @@ permissions:
 jobs:
   build-try-valkey:
     runs-on: ubuntu-latest
+    outputs:
+      try_valkey_uploaded: ${{ steps.upload-s3.outputs.files_uploaded || 'false' }}
     steps:
       - name: Setup Python
         uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
@@ -48,7 +47,7 @@ jobs:
           repository: ${{ github.repository_owner }}/valkey-release-automation
           path: valkey-release-automation
 
-      - name: Validate inputs
+      - name: Determine if try-valkey should be built
         id: validate-inputs
         run: |
           SHOULD_BUILD="true"
@@ -67,14 +66,15 @@ jobs:
               echo "Skipping Try Valkey build for unstable version"
               SHOULD_BUILD="false"
           else
-              # Check if version is the newest
+              # Check if version matches the latest release
+              # This workflow is triggered after a release is published on valkey-io/valkey,
+              # so the input version should exactly match the latest release.
               LATEST_VERSION=$(gh release list --repo valkey-io/valkey --exclude-pre-releases --json tagName --jq '.[].tagName' | sort -V | tail -n1)
-              if [[ "$(printf '%s\n%s\n' "$LATEST_VERSION" "${{ inputs.version }}" | sort -V | head -n1)" == "$LATEST_VERSION" ]]; then
-                  SHOULD_BUILD="true"
-                  echo "Version validation passed: ${{ inputs.version }} >= $LATEST_VERSION"
+              if [[ "${{ inputs.version }}" == "$LATEST_VERSION" ]]; then
+                  echo "Version validation passed: ${{ inputs.version }} == $LATEST_VERSION"
               else
                   SHOULD_BUILD="false"
-                  echo "Not the newest version: ${{ inputs.version }} < $LATEST_VERSION"
+                  echo "Version mismatch: ${{ inputs.version }} != $LATEST_VERSION (skipping try-valkey build)"
               fi
           fi
 
@@ -188,6 +188,7 @@ jobs:
           aws-region: ${{ inputs.region }}
 
       - name: Upload files to S3
+        id: upload-s3
         if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
         run: |
@@ -195,33 +196,7 @@ jobs:
           BUCKET="${{ secrets.bucket_name || secrets.AWS_S3_BUCKET }}"
           
           echo "Uploading files to S3 bucket: $BUCKET"
-          
-          # Upload filesystem files
-          aws s3 cp "$VERSION/fs/alpine-fs.json" "s3://$BUCKET/try-me-valkey/$VERSION/fs/alpine-fs.json"
-          
-          # Upload rootfs-flat directory
-          aws s3 sync "$VERSION/fs/alpine-rootfs-flat/" "s3://$BUCKET/try-me-valkey/$VERSION/fs/alpine-rootfs-flat/" --delete
-          
-          # Upload state file
-          aws s3 cp "$VERSION/states/state.bin.gz" "s3://$BUCKET/try-me-valkey/$VERSION/states/state.bin.gz"
-          
+          aws s3 sync "$VERSION/*" "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
+                    
           echo "Files uploaded successfully to S3"
-
-
-      - name: Output summary
-        if: steps.validate-inputs.outputs.should_build == 'true'
-        run: |
-          echo "## Try Valkey Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Region**: ${{ inputs.region }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **S3 Bucket**: ${{ secrets.bucket_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Download URL**: ${{ steps.extract-info.outputs.download_url }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Generated Files:" >> $GITHUB_STEP_SUMMARY
-          echo "- \`s3://${{ secrets.bucket_name }}/try-me-valkey/${{ inputs.version }}/fs/alpine-fs.json\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`s3://${{ secrets.bucket_name }}/try-me-valkey/${{ inputs.version }}/fs/alpine-rootfs-flat/\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`s3://${{ secrets.bucket_name }}/try-me-valkey/${{ inputs.version }}/states/state.bin.gz\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "The Try Valkey binaries have been built and uploaded to S3. To update the website, run the \`Update Website Downloads\` workflow with the appropriate parameters." >> $GITHUB_STEP_SUMMARY
+          echo "files_uploaded=true" >> $GITHUB_OUTPUT

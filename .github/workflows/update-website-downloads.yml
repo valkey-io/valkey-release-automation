@@ -11,6 +11,11 @@ on:
         type: string
         description: "Bashbrew output from docker automation"
         required: true
+      try_valkey_uploaded:
+        type: string
+        description: "Whether try-valkey files were uploaded to S3"
+        required: false
+        default: 'false'
     secrets:
       PAT_TOKEN:
         required: true
@@ -81,7 +86,7 @@ jobs:
 
       - name: Update Try Valkey website
         id: update-try-valkey
-        if: contains(inputs.version, '-rc') == false
+        if: inputs.try_valkey_uploaded == 'true'
         working-directory: valkey-io.github.io
         run: |
           VERSION="${{ inputs.version }}"
