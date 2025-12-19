@@ -193,7 +193,7 @@ jobs:
         working-directory: valkey-try-me
         run: |
           VERSION="${{ inputs.version }}"
-          BUCKET="${{ secrets.bucket_name || secrets.AWS_S3_BUCKET }}"
+          BUCKET="${{ secrets.AWS_S3_BUCKET }}"
           
           echo "Uploading files to S3 bucket: $BUCKET"
           aws s3 sync "$VERSION/*" "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
