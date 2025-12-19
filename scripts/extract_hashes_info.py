@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+Extract Valkey release hash information from the valkey-hashes repository.
+
+Inputs:
+    - version (str): The Valkey version to look up (e.g., "8.0.0", "7.2.5")
+    - repo_path (str): Path to the local clone of the valkey-hashes repository
+
+Outputs:
+    - Prints to stdout: "<sha256_hash> <download_url>"
+    - Exit code 0 on success, 1 on failure
+
+Usage:
+    python extract_hashes_info.py <version> <repo_path>
+
+Example:
+    python extract_hashes_info.py 8.0.0 /path/to/valkey-hashes
+    # Output: abc123def456... https://github.com/valkey-io/valkey/archive/refs/tags/8.0.0.tar.gz
+    
+"""
 import logging
 import sys
 import os
