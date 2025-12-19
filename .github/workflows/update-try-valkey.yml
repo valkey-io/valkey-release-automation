@@ -49,6 +49,8 @@ jobs:
 
       - name: Determine if try-valkey should be built
         id: validate-inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           SHOULD_BUILD="true"
 
