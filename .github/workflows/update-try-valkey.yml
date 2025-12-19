@@ -197,8 +197,8 @@ jobs:
           VERSION="${{ inputs.version }}"
           BUCKET="${{ secrets.AWS_S3_BUCKET }}"
           
-          echo "Uploading files to S3 bucket: $BUCKET"
-          aws s3 sync "$VERSION/*" "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
+          echo "Uploading files to S3 bucket"
+          aws s3 sync "$VERSION/" "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
                     
           echo "Files uploaded successfully to S3"
           echo "files_uploaded=true" >> $GITHUB_OUTPUT
