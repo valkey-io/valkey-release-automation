@@ -133,7 +133,7 @@ jobs:
             This pull request updates the valkey website for the new release ${{ inputs.version }}.
             
             Changes:
-            - Updated downloads page with new release information
+            ${{ steps.update-website.outputs.has_changes == 'true' && format('- Updated downloads page with new release information') || '' }}
             ${{ steps.update-try-valkey.outputs.has_try_valkey_changes == 'true' && format('- Updated Try Valkey page to use version {0}', inputs.version) || '' }}
 
             Please review the changes and merge when appropriate.
