@@ -1,0 +1,204 @@
+name: Build Try Valkey Image
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version of Valkey to create.
+        type: string
+        required: true
+      region:
+        description: The AWS region to upload the packages to.
+        type: string
+        required: true
+    outputs:
+      try_valkey_uploaded:
+        description: Whether try-valkey files were uploaded to S3
+        value: ${{ jobs.build-try-valkey.outputs.try_valkey_uploaded }}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version of Valkey to create.
+        type: string
+        required: true
+      region:
+        description: The AWS region to upload the packages to.
+        type: string
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-try-valkey:
+    runs-on: ubuntu-latest
+    outputs:
+      try_valkey_uploaded: ${{ steps.upload-s3.outputs.files_uploaded || 'false' }}
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
+        with:
+          python-version: '3.8'
+
+      - name: Checkout automation scripts
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-release-automation
+          path: valkey-release-automation
+
+      - name: Determine if try-valkey should be built
+        id: validate-inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHOULD_BUILD="true"
+
+          # Validate version format
+          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+              echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
+              exit 1
+          fi
+
+          # Skip RC and unstable builds
+          if [[ "${{ inputs.version }}" == *"-rc"* ]]; then
+              echo "Skipping Try Valkey build for RC version"
+              SHOULD_BUILD="false"
+          elif [[ "${{ inputs.version }}" == "unstable" ]]; then
+              echo "Skipping Try Valkey build for unstable version"
+              SHOULD_BUILD="false"
+          else
+              # Check if version matches the latest release
+              # This workflow is triggered after a release is published on valkey-io/valkey,
+              # so the input version should exactly match the latest release.
+              LATEST_VERSION=$(gh release list --repo valkey-io/valkey --exclude-pre-releases --json tagName --jq '.[].tagName' | sort -V | tail -n1)
+              if [[ "${{ inputs.version }}" == "$LATEST_VERSION" ]]; then
+                  echo "Version validation passed: ${{ inputs.version }} == $LATEST_VERSION"
+              else
+                  SHOULD_BUILD="false"
+                  echo "Version mismatch: ${{ inputs.version }} != $LATEST_VERSION (skipping try-valkey build)"
+              fi
+          fi
+
+          echo "should_build=$SHOULD_BUILD" >> $GITHUB_OUTPUT
+
+      - name: Setup Docker
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+
+      - name: Checkout valkey-try-me repository
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-try-me
+          path: valkey-try-me
+
+      - name: Checkout valkey-hashes repository
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ${{ github.repository_owner }}/valkey-hashes
+          path: valkey-hashes
+
+      - name: Install Try Valkey prerequisites
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        working-directory: valkey-try-me
+        run: |
+          # Create and activate virtual environment
+          python3 -m venv venv
+          source venv/bin/activate
+          
+          # Install dependencies
+          pip install -r requirements.txt
+          
+          # Install Playwright browser
+          playwright install chromium
+          
+          echo "Prerequisites installed successfully"
+
+      - name: Extract Valkey download info
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        id: extract-info
+        run: |
+          # Use the Python script to extract download information
+          OUTPUT=$(python3 valkey-release-automation/scripts/extract_hashes_info.py "${{ inputs.version }}" valkey-hashes)
+          DOWNLOAD_SHA=$(echo "$OUTPUT" | cut -d' ' -f1)
+          DOWNLOAD_URL=$(echo "$OUTPUT" | cut -d' ' -f2)
+          
+          echo "download_url=$DOWNLOAD_URL" >> $GITHUB_OUTPUT
+          echo "download_sha=$DOWNLOAD_SHA" >> $GITHUB_OUTPUT
+          
+          echo "Download info extracted successfully"
+
+      - name: Build Try Valkey image
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        working-directory: valkey-try-me
+        run: |
+          # Activate virtual environment
+          source venv/bin/activate
+          
+          # Run automated build
+          MODE=local AUTO_SAVE_STATE=true \
+          VALKEY_VERSION="${{ inputs.version }}" \
+          VALKEY_DOWNLOAD_URL="${{ steps.extract-info.outputs.download_url }}" \
+          VALKEY_DOWNLOAD_SHA="${{ steps.extract-info.outputs.download_sha }}" \
+          ./src/build.sh
+          
+          echo "Build completed successfully"
+
+      - name: Verify generated files
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        working-directory: valkey-try-me
+        run: |
+          VERSION="${{ inputs.version }}"
+          
+          echo "Verifying generated files for version: $VERSION"
+          
+          # Check filesystem files
+          if [[ -f "$VERSION/fs/alpine-fs.json" ]]; then
+            echo "alpine-fs.json found ($(du -h "$VERSION/fs/alpine-fs.json" | cut -f1))"
+          else
+            echo "alpine-fs.json missing"
+            exit 1
+          fi
+          
+          if [[ -d "$VERSION/fs/alpine-rootfs-flat" ]]; then
+            FILE_COUNT=$(ls -1 "$VERSION/fs/alpine-rootfs-flat" | wc -l)
+            echo "alpine-rootfs-flat directory found ($FILE_COUNT files)"
+          else
+            echo "alpine-rootfs-flat directory missing"
+            exit 1
+          fi
+          
+          # Check state file
+          STATE_FILES=($(ls "$VERSION/states/"*.gz 2>/dev/null || true))
+          if [[ ${#STATE_FILES[@]} -gt 0 ]]; then
+            for state_file in "${STATE_FILES[@]}"; do
+              SIZE=$(du -h "$state_file" | cut -f1)
+              echo "State file found: $(basename "$state_file") ($SIZE)"
+            done
+          else
+            echo "No compressed state files found"
+            exit 1
+          fi
+
+      - name: Configure AWS credentials
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Upload files to S3
+        id: upload-s3
+        if: steps.validate-inputs.outputs.should_build == 'true'
+        working-directory: valkey-try-me
+        run: |
+          VERSION="${{ inputs.version }}"
+          BUCKET="${{ secrets.AWS_S3_BUCKET }}"
+          
+          echo "Uploading files to S3 bucket"
+          aws s3 sync "$VERSION/" "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
+                    
+          echo "Files uploaded successfully to S3"
+          echo "files_uploaded=true" >> $GITHUB_OUTPUT
