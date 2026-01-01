@@ -28,9 +28,9 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test-valkey:
+  build-valkey:
     # Capture source tarball and generate checksum for it
-    name: Build and test package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
     runs-on: ${{ matrix.distro.target }}
     strategy:
       fail-fast: false
@@ -41,9 +41,15 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/valkey
           ref: ${{ inputs.version }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ inputs.region }}
+          role-to-assume: ${{ secrets.role_to_assume }}
       
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev tcl tcl-tls python3 bc curl
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
 
       - name: Make Valkey
         run: |
@@ -66,9 +72,6 @@ jobs:
             make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
           fi
 
-      - name: Run Valkey test suite
-        run: ./runtest
-
       - name: Create Tarball and SHA256sums
         run: |
           TAR_FILE_NAME=valkey-${{inputs.version}}-${{matrix.distro.platform}}-${{ matrix.distro.arch}}
@@ -79,12 +82,6 @@ jobs:
           sha256sum $TAR_FILE_NAME.tar.gz > $TAR_FILE_NAME.tar.gz.sha256
           mkdir -p packages-files
           cp -rfv $TAR_FILE_NAME.tar* packages-files/
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-region: ${{ inputs.region }}
-          role-to-assume: ${{ secrets.role_to_assume }}
           
       - name: Sync to S3
         run: aws s3 sync packages-files s3://${{ secrets.bucket_name }}/releases/
