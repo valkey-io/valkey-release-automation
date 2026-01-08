@@ -126,10 +126,10 @@ jobs:
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
           echo "bashbrew_content=$(cat bashbrew_output.json)" >> $GITHUB_OUTPUT
 
-      - name: Create Pull Request
+      - name: Commit and push valkey-container changes
         if: |
           steps.version-update.outputs.has_changes == 'true' || 
-          steps.alias-update.outputs.has_changes == 'true' 
+          steps.alias-update.outputs.has_changes == 'true'
         run: |
           cd valkey-container
           git commit -m "Update for version ${{ inputs.version }}" -s
