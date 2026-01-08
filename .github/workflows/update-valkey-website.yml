@@ -114,9 +114,8 @@ jobs:
             echo "has_try_valkey_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Commit and push valkey-io.github.io changes
+      - name: Push website changes to main
         if: steps.update-website.outputs.has_changes == 'true' || steps.update-try-valkey.outputs.has_try_valkey_changes == 'true'
         run: |
           cd valkey-io.github.io
-          git commit -m "Update for version ${{ inputs.version }}" -s
           git push origin HEAD:main

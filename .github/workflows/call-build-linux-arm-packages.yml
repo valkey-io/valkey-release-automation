@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 name: Build Linux ARM binary packages into S3 bucket
+=======
+name: Builds Linux ARM binary packages into S3 bucket.
+>>>>>>> 396f162 (Utilize a One Click Release in the Automation Process)
 
 on:
   workflow_call:
