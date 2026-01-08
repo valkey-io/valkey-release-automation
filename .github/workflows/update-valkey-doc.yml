@@ -1,0 +1,21 @@
+name: Update Valkey Documentation
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        description: "Version of the release"
+        required: true
+    secrets:
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  update-valkey-doc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print version
+        run: |
+          echo "Version received: ${{ inputs.version }}"
+          echo "This is a test run!"
