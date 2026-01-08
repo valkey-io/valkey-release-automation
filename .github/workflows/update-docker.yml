@@ -120,11 +120,18 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Generate bashbrew output
+        id: generate-bashbrew
+        run: |
+          cd valkey-container
+          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.13/scripts
+          "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
+          echo "bashbrew_content=$(cat bashbrew_output.json)" >> $GITHUB_OUTPUT
+
       - name: Create Pull Request
         if: |
           steps.version-update.outputs.has_changes == 'true' || 
-          steps.alias-update.outputs.has_changes == 'true' || 
-          steps.dockerhub-description-update.outputs.has_changes == 'true'
+          steps.alias-update.outputs.has_changes == 'true'
         id: create-pr
         uses: peter-evans/create-pull-request@v7
         with:
