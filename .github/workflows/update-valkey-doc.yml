@@ -47,3 +47,13 @@ jobs:
         run: |
           echo "=== First 20 lines of generated file ==="
           head -20 valkey-doc/topics/modules-api-ref.md
+
+      - name: Debug github context
+        run: |
+          echo "=== GitHub Context ==="
+          echo "repository_owner: ${{ github.repository_owner }}"
+          echo "repository: ${{ github.repository }}"
+          echo ""
+          echo "=== What will be checked out ==="
+          echo "Valkey: ${{ github.repository_owner }}/valkey"
+          echo "Valkey-doc: ${{ github.repository_owner }}/valkey-doc"
