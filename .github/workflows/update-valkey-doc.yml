@@ -18,4 +18,32 @@ jobs:
       - name: Print version
         run: |
           echo "Version received: ${{ inputs.version }}"
-          echo "This is a test run!"
+
+      - name: Checkout valkey
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey
+          ref: ${{ inputs.version }}
+          path: valkey
+
+      - name: Checkout valkey-doc
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-doc
+          token: ${{ secrets.PAT_TOKEN }}
+          path: valkey-doc
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.0'
+
+      - name: Generate module API docs
+        run: |
+          cd valkey
+          ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
+
+      - name: Verify API docs generated
+        run: |
+          echo "=== First 20 lines of generated file ==="
+          head -20 valkey-doc/topics/modules-api-ref.md
