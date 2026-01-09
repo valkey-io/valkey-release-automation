@@ -1,4 +1,4 @@
-name: Commit new hash into valkey-hashes
+name: Update Valkey Hashes
 
 on:
   workflow_call:

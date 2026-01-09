@@ -1,4 +1,4 @@
-name: Builds Linux arm binary packages into S3 bucket.
+name: Build Linux ARM binary packages into S3 bucket
 
 on:
   workflow_call:
