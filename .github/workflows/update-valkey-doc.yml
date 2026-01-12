@@ -15,11 +15,30 @@ jobs:
   update-valkey-doc:
     runs-on: ubuntu-latest
     steps:
-      - name: Print version
+      - name: Check release type
+        id: check-release
         run: |
-          echo "Version received: ${{ inputs.version }}"
+          VERSION="${{ inputs.version }}"
+          echo "Version received: $VERSION"
+          
+          # Get patch number
+          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
+          
+          # Get minor version (9.0.1 → 9.0)
+          MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
+          
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Patch release ($VERSION) - will skip all updates"
+            echo "is_major_minor=false" >> $GITHUB_OUTPUT
+          else
+            echo "Major/Minor release ($VERSION) - will run all updates"
+            echo "is_major_minor=true" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "minor_version=$MINOR_VERSION" >> $GITHUB_OUTPUT
 
       - name: Checkout valkey
+        if: steps.check-release.outputs.is_major_minor == 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ github.repository_owner }}/valkey
@@ -27,6 +46,7 @@ jobs:
           path: valkey
 
       - name: Checkout valkey-doc
+        if: steps.check-release.outputs.is_major_minor == 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: ${{ github.repository_owner }}/valkey-doc
@@ -34,49 +54,25 @@ jobs:
           path: valkey-doc
 
       - name: Setup Ruby
+        if: steps.check-release.outputs.is_major_minor == 'true'
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.0'
 
       - name: Generate module API docs
+        if: steps.check-release.outputs.is_major_minor == 'true'
         run: |
           cd valkey
-          VERSION="${{ inputs.version }}"
-          
-          # Get patch number
-          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
-          
-          # Only run for major/minor releases
-          if [[ "$PATCH" != "0" ]]; then
-            echo "Patch release ($VERSION) - skipping API docs generation"
-            exit 0
-          fi
-          
-          echo "Major/Minor release ($VERSION) - generating API docs"
           ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
           
-          # Verify
           echo "=== Generated modules-api-ref.md ==="
           head -20 ../valkey-doc/topics/modules-api-ref.md
-      
+
       - name: Update supported versions
+        if: steps.check-release.outputs.is_major_minor == 'true'
         run: |
           cd valkey-doc
-          VERSION="${{ inputs.version }}"
-          
-          # Strip patch version (9.0.1 → 9.0)
-          MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
-          
-          # Get patch number (9.0.1 → 1)
-          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
-          
-          # Only add new row if patch is 0 (new minor/major release)
-          if [[ "$PATCH" != "0" ]]; then
-            echo "Patch release ($VERSION) - skipping releases.md update"
-            exit 0
-          fi
-          
-          echo "Major/Minor release ($VERSION) - updating releases.md"
+          MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           
           # Get dates
           TODAY=$(date +%Y-%m-%d)
@@ -89,48 +85,27 @@ jobs:
           # Insert after header line
           sed -i "/| -- | -- | -- | -- |/a $NEW_ROW" topics/releases.md
           
-          # Verify
           echo "=== Updated releases.md ==="
           grep -A 5 "| -- | -- | -- | -- |" topics/releases.md
 
       - name: Update Makefile
+        if: steps.check-release.outputs.is_major_minor == 'true'
         run: |
           cd valkey-doc
           VERSION="${{ inputs.version }}"
-          
-          # Get patch number
-          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
-          
-          # Only update if patch is 0 (major/minor release)
-          if [[ "$PATCH" != "0" ]]; then
-            echo "Patch release ($VERSION) - skipping Makefile update"
-            exit 0
-          fi
-          
           DATE=$(date +%Y-%m-%d)
           
-          # Update VERSION and DATE in Makefile
           sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
           sed -i "s/^DATE ?= .*/DATE ?= $DATE/" Makefile
           
-          # Verify
           echo "=== Updated Makefile ==="
           head -5 Makefile
 
       - name: Update valkey.conf.md
+        if: steps.check-release.outputs.is_major_minor == 'true'
         run: |
           cd valkey-doc
-          VERSION="${{ inputs.version }}"
-          
-          MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
-          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
-          
-          if [[ "$PATCH" != "0" ]]; then
-            echo "Patch release ($VERSION) - skipping valkey.conf.md update"
-            exit 0
-          fi
-          
-          echo "Major/Minor release ($VERSION) - updating valkey.conf.md"
+          MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           
           # Create new line
           NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
@@ -141,11 +116,11 @@ jobs:
           # Insert new line before that line
           sed -i "${LINE_NUM}i\\${NEW_LINE}" topics/valkey.conf.md
           
-          # Verify
           echo "=== Updated valkey.conf.md ==="
           grep "valkey.conf for Valkey" topics/valkey.conf.md
 
       - name: Create Pull Request
+        if: steps.check-release.outputs.is_major_minor == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.PAT_TOKEN }}
