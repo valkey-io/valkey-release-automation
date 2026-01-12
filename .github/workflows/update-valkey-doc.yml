@@ -116,13 +116,19 @@ jobs:
           
           echo "Major/Minor release ($VERSION) - updating valkey.conf.md"
           
+          # Create new line
           NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
           
-          sed -i "0,/\* The self documented \[valkey.conf for Valkey/s//* $NEW_LINE\n&/" topics/valkey.conf.md
+          # Find line number of first valkey.conf entry
+          LINE_NUM=$(grep -n "The self documented \[valkey.conf for Valkey" topics/valkey.conf.md | head -1 | cut -d: -f1)
           
+          # Insert new line before that line
+          sed -i "${LINE_NUM}i\\${NEW_LINE}" topics/valkey.conf.md
+          
+          # Verify
           echo "=== Updated valkey.conf.md ==="
           grep "valkey.conf for Valkey" topics/valkey.conf.md
-
+          
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
