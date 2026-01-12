@@ -42,18 +42,37 @@ jobs:
         run: |
           cd valkey
           ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
-
-      - name: Verify API docs generated
+      
+      - name: Update supported versions
         run: |
-          echo "=== First 20 lines of generated file ==="
-          head -20 valkey-doc/topics/modules-api-ref.md
-
-      - name: Debug github context
-        run: |
-          echo "=== GitHub Context ==="
-          echo "repository_owner: ${{ github.repository_owner }}"
-          echo "repository: ${{ github.repository }}"
-          echo ""
-          echo "=== What will be checked out ==="
-          echo "Valkey: ${{ github.repository_owner }}/valkey"
-          echo "Valkey-doc: ${{ github.repository_owner }}/valkey-doc"
+          cd valkey-doc
+          VERSION="${{ inputs.version }}"
+          
+          # Strip patch version (9.0.1 → 9.0)
+          MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
+          
+          # Get patch number (9.0.1 → 1)
+          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
+          
+          # Only add new row if patch is 0 (new minor/major release)
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Patch release ($VERSION) - skipping releases.md update"
+            exit 0
+          fi
+          
+          echo "Major/Minor release ($VERSION) - updating releases.md"
+          
+          # Get dates
+          TODAY=$(date +%Y-%m-%d)
+          MAINTENANCE_END=$(date -d "+3 years" +%Y-%m-%d)
+          SECURITY_END=$(date -d "+5 years" +%Y-%m-%d)
+          
+          # Create new row
+          NEW_ROW="| $MINOR_VERSION | $TODAY | $MAINTENANCE_END | $SECURITY_END |"
+          
+          # Insert after header line
+          sed -i "/| -- | -- | -- | -- |/a $NEW_ROW" topics/releases.md
+          
+          # Verify
+          echo "=== Updated releases.md ==="
+          grep -A 5 "| -- | -- | -- | -- |" topics/releases.md
