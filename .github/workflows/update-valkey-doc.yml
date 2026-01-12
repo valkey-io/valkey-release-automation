@@ -41,7 +41,23 @@ jobs:
       - name: Generate module API docs
         run: |
           cd valkey
+          VERSION="${{ inputs.version }}"
+          
+          # Get patch number
+          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
+          
+          # Only run for major/minor releases
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Patch release ($VERSION) - skipping API docs generation"
+            exit 0
+          fi
+          
+          echo "Major/Minor release ($VERSION) - generating API docs"
           ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
+          
+          # Verify
+          echo "=== Generated modules-api-ref.md ==="
+          head -20 ../valkey-doc/topics/modules-api-ref.md
       
       - name: Update supported versions
         run: |
@@ -128,7 +144,7 @@ jobs:
           # Verify
           echo "=== Updated valkey.conf.md ==="
           grep "valkey.conf for Valkey" topics/valkey.conf.md
-          
+
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
