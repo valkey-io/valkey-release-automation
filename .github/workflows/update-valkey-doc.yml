@@ -19,19 +19,12 @@ jobs:
         id: check-release
         run: |
           VERSION="${{ inputs.version }}"
-          echo "Version received: $VERSION"
-          
-          # Get patch number
           PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
-          
-          # Get minor version (9.0.1 → 9.0)
           MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
           
           if [[ "$PATCH" != "0" ]]; then
-            echo "Patch release ($VERSION) - will skip all updates"
             echo "is_major_minor=false" >> $GITHUB_OUTPUT
           else
-            echo "Major/Minor release ($VERSION) - will run all updates"
             echo "is_major_minor=true" >> $GITHUB_OUTPUT
           fi
           
@@ -64,9 +57,6 @@ jobs:
         run: |
           cd valkey
           ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
-          
-          echo "=== Generated modules-api-ref.md ==="
-          head -20 ../valkey-doc/topics/modules-api-ref.md
 
       - name: Update supported versions
         if: steps.check-release.outputs.is_major_minor == 'true'
@@ -74,19 +64,13 @@ jobs:
           cd valkey-doc
           MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           
-          # Get dates
           TODAY=$(date +%Y-%m-%d)
           MAINTENANCE_END=$(date -d "+3 years" +%Y-%m-%d)
           SECURITY_END=$(date -d "+5 years" +%Y-%m-%d)
           
-          # Create new row
           NEW_ROW="| $MINOR_VERSION | $TODAY | $MAINTENANCE_END | $SECURITY_END |"
           
-          # Insert after header line
           sed -i "/| -- | -- | -- | -- |/a $NEW_ROW" topics/releases.md
-          
-          echo "=== Updated releases.md ==="
-          grep -A 5 "| -- | -- | -- | -- |" topics/releases.md
 
       - name: Update Makefile
         if: steps.check-release.outputs.is_major_minor == 'true'
@@ -97,9 +81,6 @@ jobs:
           
           sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
           sed -i "s/^DATE ?= .*/DATE ?= $DATE/" Makefile
-          
-          echo "=== Updated Makefile ==="
-          head -5 Makefile
 
       - name: Update valkey.conf.md
         if: steps.check-release.outputs.is_major_minor == 'true'
@@ -107,17 +88,11 @@ jobs:
           cd valkey-doc
           MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           
-          # Create new line
           NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
           
-          # Find line number of first valkey.conf entry
           LINE_NUM=$(grep -n "The self documented \[valkey.conf for Valkey" topics/valkey.conf.md | head -1 | cut -d: -f1)
           
-          # Insert new line before that line
           sed -i "${LINE_NUM}i\\${NEW_LINE}" topics/valkey.conf.md
-          
-          echo "=== Updated valkey.conf.md ==="
-          grep "valkey.conf for Valkey" topics/valkey.conf.md
 
       - name: Create Pull Request
         if: steps.check-release.outputs.is_major_minor == 'true'
