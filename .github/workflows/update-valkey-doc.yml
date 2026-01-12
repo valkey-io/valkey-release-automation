@@ -76,3 +76,67 @@ jobs:
           # Verify
           echo "=== Updated releases.md ==="
           grep -A 5 "| -- | -- | -- | -- |" topics/releases.md
+
+      - name: Update Makefile
+        run: |
+          cd valkey-doc
+          VERSION="${{ inputs.version }}"
+          
+          # Get patch number
+          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
+          
+          # Only update if patch is 0 (major/minor release)
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Patch release ($VERSION) - skipping Makefile update"
+            exit 0
+          fi
+          
+          DATE=$(date +%Y-%m-%d)
+          
+          # Update VERSION and DATE in Makefile
+          sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
+          sed -i "s/^DATE ?= .*/DATE ?= $DATE/" Makefile
+          
+          # Verify
+          echo "=== Updated Makefile ==="
+          head -5 Makefile
+
+      - name: Update valkey.conf.md
+        run: |
+          cd valkey-doc
+          VERSION="${{ inputs.version }}"
+          
+          MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
+          
+          if [[ "$PATCH" != "0" ]]; then
+            echo "Patch release ($VERSION) - skipping valkey.conf.md update"
+            exit 0
+          fi
+          
+          echo "Major/Minor release ($VERSION) - updating valkey.conf.md"
+          
+          NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
+          
+          sed -i "0,/\* The self documented \[valkey.conf for Valkey/s//* $NEW_LINE\n&/" topics/valkey.conf.md
+          
+          echo "=== Updated valkey.conf.md ==="
+          grep "valkey.conf for Valkey" topics/valkey.conf.md
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          path: valkey-doc
+          branch: update-docs-${{ inputs.version }}
+          commit-message: "Update documentation for Valkey ${{ inputs.version }}"
+          title: "Update documentation for Valkey ${{ inputs.version }}"
+          body: |
+            This PR updates documentation for version `${{ inputs.version }}`.
+            
+            ## Changes
+            - Updated VERSION in Makefile
+            - Updated DATE in Makefile
+            - Regenerated module API docs
+            - Added new version to supported versions list
+            - Added new valkey.conf link
