@@ -63,10 +63,16 @@ jobs:
         run: |
           cd valkey-doc
           MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
+          MINOR_NUM=$(echo "$MINOR_VERSION" | cut -d. -f2)
           
           TODAY=$(date +%Y-%m-%d)
           MAINTENANCE_END=$(date -d "+3 years" +%Y-%m-%d)
-          SECURITY_END=$(date -d "+5 years" +%Y-%m-%d)
+          
+          if [[ "$MINOR_NUM" == "0" ]]; then
+            SECURITY_END="$MAINTENANCE_END"
+          else
+            SECURITY_END=$(date -d "+5 years" +%Y-%m-%d)
+          fi
           
           NEW_ROW="| $MINOR_VERSION | $TODAY | $MAINTENANCE_END | $SECURITY_END |"
           
