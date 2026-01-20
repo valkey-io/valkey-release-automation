@@ -5,7 +5,7 @@ on:
     inputs:
       version:
         type: string
-        description: "Version of the package to build"
+        description: "Valkey version that was released"
         required: true
     secrets:
       PAT_TOKEN:
