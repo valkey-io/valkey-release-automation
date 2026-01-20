@@ -107,8 +107,7 @@ jobs:
             This PR updates documentation for version `${{ inputs.version }}`.
             
             ## Changes
-            - Updated VERSION in Makefile
-            - Updated DATE in Makefile
-            - Regenerated module API docs
-            - Added new version to supported versions list
+            - Updated VERSION and DATE in Makefile
+            - Ran the ruby script to extract module API docs
+            - Updated the List of supported versions in the doc repo
             - Added new valkey.conf link
