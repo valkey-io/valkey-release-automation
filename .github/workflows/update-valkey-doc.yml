@@ -54,14 +54,13 @@ jobs:
 
       - name: Generate module API docs
         if: steps.check-release.outputs.is_major_minor == 'true'
-        run: |
-          cd valkey
-          ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
+        working-directory: valkey
+        run: ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
 
       - name: Update supported versions
         if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey-doc
         run: |
-          cd valkey-doc
           MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           MINOR_NUM=$(echo "$MINOR_VERSION" | cut -d. -f2)
           
@@ -80,8 +79,8 @@ jobs:
 
       - name: Update Makefile
         if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey-doc
         run: |
-          cd valkey-doc
           VERSION="${{ inputs.version }}"
           DATE=$(date +%Y-%m-%d)
           
@@ -90,8 +89,8 @@ jobs:
 
       - name: Update valkey.conf.md
         if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey-doc
         run: |
-          cd valkey-doc
           MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           
           NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
