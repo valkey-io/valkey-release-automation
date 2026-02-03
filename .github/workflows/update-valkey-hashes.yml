@@ -43,7 +43,7 @@ jobs:
         run: |
           set -e
           VERSION=${{ inputs.version }}
-          URL="https://github.com/hanxizh9910/valkey/archive/refs/tags/${VERSION}.tar.gz"
+          URL="https://github.com/valkey-io/valkey/archive/refs/tags/${VERSION}.tar.gz"
           FILENAME="valkey-${VERSION}.tar.gz"
           
           # Download the tar.gz file
