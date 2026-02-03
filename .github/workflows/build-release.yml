@@ -108,6 +108,17 @@ jobs:
       version: ${{ needs.process-inputs.outputs.version }}
     secrets:
       PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+
+  update-valkey-doc:
+    needs:
+      - process-inputs
+      - update-valkey-hashes
+    if: needs.process-inputs.outputs.environment == 'prod'
+    uses: ./.github/workflows/update-valkey-doc.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+    secrets:
+      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
   
   generate-build-matrix:
     needs:
