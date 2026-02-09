@@ -1,0 +1,118 @@
+name: Update Valkey Documentation
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        description: "Version of the release"
+        required: true
+    secrets:
+      PAT_TOKEN:
+        required: true
+
+jobs:
+  update-valkey-doc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check release type
+        id: check-release
+        run: |
+          VERSION="${{ inputs.version }}"
+          PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
+          MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
+          
+          if [[ "$PATCH" != "0" ]]; then
+            echo "is_major_minor=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_major_minor=true" >> $GITHUB_OUTPUT
+          fi
+          
+          echo "minor_version=$MINOR_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Checkout valkey
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey
+          ref: ${{ inputs.version }}
+          path: valkey
+
+      - name: Checkout valkey-doc
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-doc
+          token: ${{ secrets.PAT_TOKEN }}
+          path: valkey-doc
+
+      - name: Setup Ruby
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.0'
+
+      - name: Generate module API docs
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey
+        run: ./utils/generate-module-api-doc.rb > ../valkey-doc/topics/modules-api-ref.md
+
+      - name: Update supported versions
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey-doc
+        run: |
+          MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
+          MINOR_NUM=$(echo "$MINOR_VERSION" | cut -d. -f2)
+          
+          TODAY=$(date +%Y-%m-%d)
+          MAINTENANCE_END=$(date -d "+3 years" +%Y-%m-%d)
+          
+          if [[ "$MINOR_NUM" == "0" ]]; then
+            SECURITY_END="$MAINTENANCE_END"
+          else
+            SECURITY_END=$(date -d "+5 years" +%Y-%m-%d)
+          fi
+          
+          NEW_ROW="| $MINOR_VERSION | $TODAY | $MAINTENANCE_END | $SECURITY_END |"
+          
+          sed -i "/| -- | -- | -- | -- |/a $NEW_ROW" topics/releases.md
+
+      - name: Update Makefile
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey-doc
+        run: |
+          VERSION="${{ inputs.version }}"
+          DATE=$(date +%Y-%m-%d)
+          
+          sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
+          sed -i "s/^DATE ?= .*/DATE ?= $DATE/" Makefile
+
+      - name: Update valkey.conf.md
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        working-directory: valkey-doc
+        run: |
+          MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
+          
+          NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
+          
+          LINE_NUM=$(grep -n "The self documented \[valkey.conf for Valkey" topics/valkey.conf.md | head -1 | cut -d: -f1)
+          
+          sed -i "${LINE_NUM}i\\${NEW_LINE}" topics/valkey.conf.md
+
+      - name: Create Pull Request
+        if: steps.check-release.outputs.is_major_minor == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          path: valkey-doc
+          branch: update-docs-${{ inputs.version }}
+          commit-message: "Update documentation for Valkey ${{ inputs.version }}"
+          title: "Update documentation for Valkey ${{ inputs.version }}"
+          body: |
+            This PR updates documentation for version `${{ inputs.version }}`.
+            
+            ## Changes
+            - Updated VERSION and DATE in Makefile
+            - Ran the ruby script to extract module API docs
+            - Updated the List of supported versions in the doc repo
+            - Added new valkey.conf link
