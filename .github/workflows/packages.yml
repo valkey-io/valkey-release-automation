@@ -1,0 +1,921 @@
+name: Build Valkey Packages (RPM + DEB)
+
+on:
+  push:
+    branches:
+      - pipeline
+    paths:
+      - 'packaging/9.0.x/**'
+      - '.github/workflows/build_packages.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packaging/9.0.x/**'
+      - '.github/workflows/build_packages.yml'
+  workflow_dispatch:
+
+env:
+  VALKEY_VERSION: "9.0.2"
+
+jobs:
+  ############################################################################
+  # RPM Builds
+  ############################################################################
+  build-rpm:
+    name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # arch: [x86_64, aarch64]
+        arch: [x86_64]
+        platform:
+          # SUSE/openSUSE
+          - name: "openSUSE Leap 15.5"
+            container: "opensuse/leap:15.5"
+            id: "opensuse-15.5"
+            family: "suse"
+            epel: "none"
+
+          - name: "openSUSE Leap 15.6"
+            container: "opensuse/leap:15.6"
+            id: "opensuse-15.6"
+            family: "suse"
+            epel: "none"
+
+          # Oracle Linux
+          - name: "Oracle Linux 8"
+            container: "oraclelinux:8"
+            id: "el8"
+            family: "rhel"
+            epel: "oracle-epel-release-el8"
+
+          - name: "Oracle Linux 9"
+            container: "oraclelinux:9"
+            id: "el9"
+            family: "rhel"
+            epel: "oracle-epel-release-el9"
+
+          - name: "Oracle Linux 10"
+            container: "oraclelinux:10"
+            id: "el10"
+            family: "rhel"
+            epel: "oracle-epel-release-el10"
+
+          # Rocky Linux
+          - name: "Rocky Linux 8"
+            container: "rockylinux:8"
+            id: "rocky8"
+            family: "rhel"
+            epel: "epel-release"
+
+          - name: "Rocky Linux 9"
+            container: "rockylinux:9"
+            id: "rocky9"
+            family: "rhel"
+            epel: "epel-release"
+
+          - name: "Rocky Linux 10"
+            container: "rockylinux/rockylinux:10"
+            id: "rocky10"
+            family: "rhel"
+            epel: "epel-release"
+
+          # AlmaLinux
+          - name: "AlmaLinux 8"
+            container: "almalinux:8"
+            id: "alma8"
+            family: "rhel"
+            epel: "epel-release"
+
+          - name: "AlmaLinux 9"
+            container: "almalinux:9"
+            id: "alma9"
+            family: "rhel"
+            epel: "epel-release"
+
+          - name: "AlmaLinux 10"
+            container: "almalinux:10"
+            id: "alma10"
+            family: "rhel"
+            epel: "epel-release"
+
+          # Amazon Linux
+          - name: "Amazon Linux 2023"
+            container: "amazonlinux:2023"
+            id: "amzn2023"
+            family: "rhel"
+            epel: "none"
+
+          # Fedora
+          - name: "Fedora 39"
+            container: "fedora:39"
+            id: "fedora39"
+            family: "rhel"
+            epel: "none"
+
+          - name: "Fedora 40"
+            container: "fedora:40"
+            id: "fedora40"
+            family: "rhel"
+            epel: "none"
+
+          - name: "Fedora 41"
+            container: "fedora:41"
+            id: "fedora41"
+            family: "rhel"
+            epel: "none"
+
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+
+      - name: Build RPM in container
+        run: |
+          DOCKER_PLATFORM="linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}"
+
+          docker run --rm \
+            --platform="$DOCKER_PLATFORM" \
+            -e PLATFORM_FAMILY="${{ matrix.platform.family }}" \
+            -e PLATFORM_ID="${{ matrix.platform.id }}" \
+            -e EPEL_PACKAGE="${{ matrix.platform.epel }}" \
+            -e VALKEY_VERSION="${{ env.VALKEY_VERSION }}" \
+            -e EXPECTED_ARCH="${{ matrix.arch }}" \
+            -v "${{ github.workspace }}/packaging/9.0.x/rpm:/packaging:ro" \
+            -v "$(pwd)/output:/output" \
+            ${{ matrix.platform.container }} \
+            bash -c '
+              set -e
+
+              echo "============================================="
+              echo "Building on $(cat /etc/os-release | grep PRETTY_NAME | cut -d\" -f2)"
+              echo "Architecture: ${EXPECTED_ARCH}"
+              echo "============================================="
+              echo ""
+
+              echo "::group::Install git and build dependencies"
+
+              if [ "$PLATFORM_FAMILY" = "suse" ]; then
+                zypper refresh
+                zypper install -y \
+                  rpm-build \
+                  rpmdevtools \
+                  gcc \
+                  make \
+                  jemalloc-devel \
+                  libopenssl-devel \
+                  pkg-config \
+                  procps \
+                  python3 \
+                  sysuser-shadow \
+                  sysuser-tools \
+                  tcl \
+                  systemd-devel \
+                  systemd \
+                  libsystemd0 \
+                  wget \
+                  tar \
+                  gzip
+
+                # Try to install pandoc for docs on SUSE
+                if zypper install -y pandoc python3-yaml; then
+                  echo "✓ pandoc installed"
+                else
+                  echo "⚠ pandoc installation failed"
+                fi
+
+              else
+                # RHEL-based
+                if command -v dnf &> /dev/null; then
+                  PKG_MGR="dnf"
+                else
+                  PKG_MGR="yum"
+                fi
+
+                # Install EPEL if needed
+                if [ "$EPEL_PACKAGE" != "none" ] && [ "$EPEL_PACKAGE" != "skip" ]; then
+                  echo "Installing EPEL: ${EPEL_PACKAGE}"
+                  $PKG_MGR install -y ${EPEL_PACKAGE} || echo "EPEL installation failed (non-critical)"
+                elif [ "$EPEL_PACKAGE" = "skip" ]; then
+                  echo "Skipping EPEL (not available for this platform yet)"
+                else
+                  echo "Skipping EPEL (not needed for this platform)"
+                fi
+
+                # Install build dependencies
+                $PKG_MGR install -y \
+                  rpm-build \
+                  rpmdevtools \
+                  gcc \
+                  make \
+                  jemalloc-devel \
+                  openssl-devel \
+                  pkgconfig \
+                  procps-ng \
+                  python3 \
+                  systemd-devel \
+                  systemd-rpm-macros \
+                  tcl \
+                  wget \
+                  tar \
+                  gzip
+
+                # Only Amazon Linux has pandoc for docs
+                if [ "$PLATFORM_ID" = "amzn2023" ]; then
+                  $PKG_MGR install -y pandoc python3-pyyaml || echo "pandoc not available"
+                fi
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Setup RPM build environment"
+
+              PACKAGING_DIR="/packaging"
+
+              # Verify packaging files are mounted
+              if [ ! -d "$PACKAGING_DIR" ]; then
+                echo "ERROR: Packaging directory not found at $PACKAGING_DIR!"
+                exit 1
+              fi
+
+              echo "✓ Found packaging files at: $PACKAGING_DIR"
+              ls -la "$PACKAGING_DIR"
+
+              # Detect rpmbuild directory (SUSE uses /usr/src/packages, others use ~/rpmbuild)
+              if [ "$PLATFORM_FAMILY" = "suse" ]; then
+                BUILD_ROOT="/usr/src/packages"
+              else
+                BUILD_ROOT="$HOME/rpmbuild"
+              fi
+
+              echo "Using build root: $BUILD_ROOT"
+
+              # Create rpmbuild structure
+              mkdir -p $BUILD_ROOT/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+              # Copy spec file
+              if [ -f "$PACKAGING_DIR/valkey-9.0.spec" ]; then
+                cp "$PACKAGING_DIR/valkey-9.0.spec" $BUILD_ROOT/SPECS/valkey.spec
+              elif [ -f "$PACKAGING_DIR/valkey.spec" ]; then
+                cp "$PACKAGING_DIR/valkey.spec" $BUILD_ROOT/SPECS/valkey.spec
+              else
+                echo "ERROR: Cannot find spec file"
+                ls -la "$PACKAGING_DIR"
+                exit 1
+              fi
+
+              # Copy all source files
+              cp "$PACKAGING_DIR"/valkey-9.0.2.tar.gz $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "Main source not in repo"
+              cp "$PACKAGING_DIR"/valkey-doc-9.0.0.tar.gz $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "Doc source not in repo"
+              cp "$PACKAGING_DIR"/valkey.logrotate $BUILD_ROOT/SOURCES/ || echo "No logrotate file"
+              cp "$PACKAGING_DIR"/valkey*.service $BUILD_ROOT/SOURCES/ || echo "No service files"
+              cp "$PACKAGING_DIR"/valkey*.target $BUILD_ROOT/SOURCES/ || echo "No target files"
+              cp "$PACKAGING_DIR"/valkey.tmpfiles.d $BUILD_ROOT/SOURCES/ || echo "No tmpfiles"
+              cp "$PACKAGING_DIR"/valkey.sysctl $BUILD_ROOT/SOURCES/ || echo "No sysctl"
+              cp "$PACKAGING_DIR"/valkey-user.conf $BUILD_ROOT/SOURCES/ || echo "No user conf"
+              cp "$PACKAGING_DIR"/macros.valkey $BUILD_ROOT/SOURCES/ || echo "No macros"
+              cp "$PACKAGING_DIR"/migrate_redis_to_valkey.bash $BUILD_ROOT/SOURCES/ || echo "No migration script"
+              cp "$PACKAGING_DIR"/valkey-conf.patch $BUILD_ROOT/SOURCES/ || echo "No conf patch"
+
+              # Copy appropriate README (copy both to be safe, spec will use correct one)
+              cp "$PACKAGING_DIR"/README.SUSE $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "No README.SUSE (not critical)"
+              cp "$PACKAGING_DIR"/README.RHEL $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "No README.RHEL (not critical)"
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Download Valkey source"
+
+              cd $BUILD_ROOT/SOURCES
+
+              # Download main source if not present
+              if [ ! -f "valkey-${VALKEY_VERSION}.tar.gz" ]; then
+                echo "Downloading Valkey ${VALKEY_VERSION}..."
+                wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}/valkey-${VALKEY_VERSION}.tar.gz
+              fi
+
+              # Always download docs (spec %prep needs it even if not building docs)
+              if [ ! -f "valkey-doc-9.0.0.tar.gz" ]; then
+                echo "Downloading Valkey documentation..."
+                wget -q https://github.com/valkey-io/valkey-doc/archive/9.0.0/valkey-doc-9.0.0.tar.gz || {
+                  echo "Doc download failed, creating dummy tarball..."
+                  mkdir -p valkey-doc-9.0.0
+                  tar czf valkey-doc-9.0.0.tar.gz valkey-doc-9.0.0
+                  rm -rf valkey-doc-9.0.0
+                }
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Build RPM"
+
+              cd $BUILD_ROOT/SPECS
+
+              # Define platform macros for RPM
+              if [ "$PLATFORM_FAMILY" = "suse" ]; then
+                echo "%is_suse 1" > ~/.rpmmacros
+              else
+                echo "%is_rhel 1" > ~/.rpmmacros
+              fi
+
+              # Build RPM - use --without doc if pandoc not installed
+              if [[ "$PLATFORM_ID" == fedora* ]]; then
+                echo "Building without docs for Fedora..."
+                sed -i "/^BuildRequires:.*pandoc/d" valkey.spec
+                sed -i "/^BuildRequires:.*python3-pyyaml/d" valkey.spec
+                rpmbuild -ba --without doc valkey.spec
+              elif command -v pandoc &> /dev/null; then
+                echo "Building with documentation (pandoc is installed)"
+                rpmbuild -ba valkey.spec
+              else
+                echo "Building without documentation (pandoc not available)"
+                sed -i "/^BuildRequires:.*pandoc/d" valkey.spec
+                sed -i "/^BuildRequires:.*python3-pyyaml/d" valkey.spec
+                sed -i "/^BuildRequires:.*python3-yaml/d" valkey.spec
+                rpmbuild -ba --without docs valkey.spec
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              # Copy RPMs to output
+              mkdir -p /output
+              find $BUILD_ROOT/RPMS -name "*.rpm" -type f -exec cp {} /output/ \;
+              find $BUILD_ROOT/SRPMS -name "*.rpm" -type f -exec cp {} /output/ \;
+
+              # List built packages
+              echo "::group::Binary RPMs"
+              find $BUILD_ROOT/RPMS -name "*.rpm" -type f -exec ls -lh {} \;
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Source RPMs"
+              find $BUILD_ROOT/SRPMS -name "*.rpm" -type f -exec ls -lh {} \;
+              echo "::endgroup::"
+              echo ""
+
+              # Run sanity checks
+              echo "::group::Package Sanity Checks"
+
+              MAIN_RPM=$(find $BUILD_ROOT/RPMS -name "valkey-${VALKEY_VERSION}*.rpm" -type f | grep -v devel | grep -v compat | head -1)
+
+              if [ -z "$MAIN_RPM" ]; then
+                echo "ERROR: Main valkey RPM not found!"
+                exit 1
+              fi
+
+              echo "Checking: $MAIN_RPM"
+              echo "Architecture: ${EXPECTED_ARCH}"
+              echo ""
+
+              # 1. RPM Query Test
+              echo "1. RPM Query Test..."
+              rpm -qip "$MAIN_RPM" || exit 1
+              echo "   ✓ RPM is valid"
+              echo ""
+
+              # 2. Required Files Test
+              echo "2. Required Files Test..."
+              for file in /usr/bin/valkey-server /usr/bin/valkey-cli; do
+                if rpm -qlp "$MAIN_RPM" | grep -q "^${file}$"; then
+                  echo "   ✓ $file"
+                else
+                  echo "   ✗ MISSING: $file"
+                  exit 1
+                fi
+              done
+              echo ""
+
+              # 3. Architecture Check
+              echo "3. Architecture Check..."
+              ARCH=$(rpm -qp --qf "%{ARCH}" "$MAIN_RPM")
+              if [ "$ARCH" = "${EXPECTED_ARCH}" ] || [ "$ARCH" = "noarch" ]; then
+                echo "   ✓ Architecture: $ARCH"
+              else
+                echo "   ✗ Wrong architecture: $ARCH (expected: ${EXPECTED_ARCH})"
+                exit 1
+              fi
+              echo ""
+
+              # 4. Package Size Check
+              echo "4. Package Size Check..."
+              SIZE=$(du -h "$MAIN_RPM" | cut -f1)
+              SIZE_BYTES=$(stat -c%s "$MAIN_RPM")
+              echo "   Package size: $SIZE"
+              if [ $SIZE_BYTES -lt 500000 ]; then
+                echo "   ✗ Package too small"
+                exit 1
+              else
+                echo "   ✓ Package size reasonable"
+              fi
+              echo ""
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "============================================="
+              echo "✓ All checks passed for ${PLATFORM_ID} (${EXPECTED_ARCH})"
+              echo "============================================="
+            '
+
+      - name: List built packages
+        run: |
+          echo "Built packages:"
+          ls -lh output/
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}
+          path: output/*.rpm
+          retention-days: 30
+
+  ############################################################################
+  # DEB Builds
+  ############################################################################
+  build-deb:
+    name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # arch: [amd64, arm64]
+        arch: [amd64]
+        platform:
+          # Debian
+          - name: "Debian 11 (Bullseye)"
+            container: "debian:11"
+            id: "debian11"
+            codename: "bullseye"
+
+          - name: "Debian 12 (Bookworm)"
+            container: "debian:12"
+            id: "debian12"
+            codename: "bookworm"
+
+          - name: "Debian 13 (Trixie)"
+            container: "debian:trixie"
+            id: "debian13"
+            codename: "trixie"
+
+          # Ubuntu
+          - name: "Ubuntu 22.04 (Jammy)"
+            container: "ubuntu:22.04"
+            id: "ubuntu2204"
+            codename: "jammy"
+
+          - name: "Ubuntu 24.04 (Noble)"
+            container: "ubuntu:24.04"
+            id: "ubuntu2404"
+            codename: "noble"
+
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for cross-platform builds
+        if: matrix.arch == 'arm64' && runner.os == 'Linux' && runner.arch == 'X64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build DEB in container
+        run: |
+          DOCKER_PLATFORM="linux/${{ matrix.arch }}"
+
+          docker run --rm \
+            --platform="$DOCKER_PLATFORM" \
+            -e PLATFORM_ID="${{ matrix.platform.id }}" \
+            -e PLATFORM_CODENAME="${{ matrix.platform.codename }}" \
+            -e VALKEY_VERSION="${{ env.VALKEY_VERSION }}" \
+            -e EXPECTED_ARCH="${{ matrix.arch }}" \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "${{ github.workspace }}/packaging/9.0.x/debian:/packaging:ro" \
+            -v "$(pwd)/output:/output" \
+            ${{ matrix.platform.container }} \
+            bash -c '
+              set -e
+
+              echo "============================================="
+              echo "Building on $(cat /etc/os-release | grep PRETTY_NAME | cut -d\" -f2)"
+              echo "Architecture: ${EXPECTED_ARCH}"
+              echo "============================================="
+              echo ""
+
+              echo "::group::Install build dependencies"
+
+              apt-get update
+
+              apt-get install -y \
+                build-essential \
+                debhelper \
+                devscripts \
+                fakeroot \
+                dpkg-dev \
+                ca-certificates \
+                curl \
+                wget \
+                tar \
+                gzip \
+                lsb-release
+
+              # Install all required build dependencies
+              echo "Installing Valkey build dependencies..."
+              apt-get install -y libjemalloc-dev
+              ls -lah /usr/include/jemalloc/jemalloc.h
+              apt-get install -y libsystemd-dev
+              apt-get -y install pkg-config || true
+              apt-get -y install pkgconf || true
+              apt-get install -y \
+                libjemalloc-dev \
+                libssl-dev \
+                tcl \
+                tcl-dev \
+                libsystemd-dev \
+                python3 \
+                python3-sphinx \
+                python3-sphinx-rtd-theme \
+                python3-yaml \
+                dh-exec \
+                libhiredis-dev \
+                liblua5.1-dev \
+                liblzf-dev \
+                lua-bitop-dev \
+                lua-cjson-dev \
+                pandoc \
+                tcl-tls || {
+                  echo "Some packages not available, trying alternatives..."
+
+                  apt-get install -y \
+                    libjemalloc-dev \
+                    libssl-dev \
+                    pkg-config \
+                    pkgconf \
+                    tcl \
+                    tcl-dev \
+                    libsystemd-dev \
+                    python3 \
+                    python3-sphinx \
+                    python3-sphinx-rtd-theme \
+                    python3-yaml \
+                    dh-exec || true
+
+                  apt-get install -y libhiredis-dev || echo "libhiredis-dev not available"
+                  apt-get install -y liblua5.1-dev || echo "liblua5.1-dev not available"
+                  apt-get install -y liblzf-dev || echo "liblzf-dev not available"
+                  apt-get install -y lua-bitop-dev || echo "lua-bitop-dev not available"
+                  apt-get install -y lua-cjson-dev || echo "lua-cjson-dev not available"
+                  apt-get install -y pandoc || echo "pandoc not available"
+                  apt-get install -y tcl-tls || echo "tcl-tls not available"
+                }
+
+              # Check jemalloc installation
+              echo ""
+              echo "Checking jemalloc installation..."
+              if dpkg -l | grep -q libjemalloc-dev; then
+                echo "✓ libjemalloc-dev is installed"
+                dpkg -L libjemalloc-dev | grep "\.h$" | head -5 || echo "No header files found"
+
+                if [ -f "/usr/include/jemalloc/jemalloc.h" ]; then
+                  echo "✓ jemalloc.h found at /usr/include/jemalloc/jemalloc.h"
+                else
+                  echo "⚠ jemalloc.h NOT found at expected location"
+                  echo "Searching for jemalloc.h..."
+                  find /usr -name "jemalloc.h" 2>/dev/null || echo "Not found anywhere"
+                fi
+              else
+                echo "⚠ libjemalloc-dev is NOT installed"
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Prepare source and debian directory"
+
+              PACKAGING_DIR="/packaging"
+
+              # Verify packaging files are mounted
+              if [ ! -d "$PACKAGING_DIR" ]; then
+                echo "ERROR: Packaging directory not found at $PACKAGING_DIR!"
+                exit 1
+              fi
+
+              echo "✓ Found packaging files at: $PACKAGING_DIR"
+
+              # Download Valkey source
+              echo "Downloading Valkey ${VALKEY_VERSION}..."
+              cd /root
+              wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz
+
+              # Extract source
+              echo "Extracting source..."
+              tar xzf valkey_${VALKEY_VERSION}.orig.tar.gz
+
+              # Copy debian directory to extracted source
+              echo "Copying debian directory from ${PACKAGING_DIR}..."
+              cp -r ${PACKAGING_DIR} valkey-${VALKEY_VERSION}/debian
+
+              # Verify debian directory was copied
+              if [ ! -d "valkey-${VALKEY_VERSION}/debian" ]; then
+                echo "ERROR: Failed to copy debian directory!"
+                exit 1
+              fi
+
+              echo "✓ Debian directory copied successfully"
+
+              cd valkey-${VALKEY_VERSION}
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Fix debhelper compat level conflict"
+
+              if grep -q "debhelper-compat" debian/control; then
+                echo "Found debhelper-compat in debian/control"
+
+                if [ -f "debian/compat" ]; then
+                  COMPAT_LEVEL=$(cat debian/compat)
+                  echo "Removing debian/compat (was: ${COMPAT_LEVEL})"
+                  rm debian/compat
+                  echo "✓ Using debhelper-compat from debian/control only"
+                else
+                  echo "✓ No debian/compat file (correct)"
+                fi
+              else
+                echo "Using debian/compat file"
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Fix jemalloc for Ubuntu 22.04"
+
+              if grep -q "jammy" /etc/os-release 2>/dev/null; then
+                echo "Detected Ubuntu 22.04 (Jammy)"
+
+                if [ ! -f "/usr/include/jemalloc/jemalloc.h" ]; then
+                  echo "⚠ jemalloc headers not found - disabling USE_SYSTEM_JEMALLOC"
+
+                  if [ -f "debian/rules" ]; then
+                    echo "Patching debian/rules to disable USE_SYSTEM_JEMALLOC..."
+                    sed -i "s/USE_SYSTEM_JEMALLOC=yes/USE_SYSTEM_JEMALLOC=no/g" debian/rules || true
+                    sed -i "s/USE_JEMALLOC=yes/USE_JEMALLOC=yes/g" debian/rules || true
+                    echo "✓ Patched debian/rules"
+                  fi
+                else
+                  echo "✓ jemalloc headers found - keeping USE_SYSTEM_JEMALLOC"
+                fi
+              else
+                echo "Not Ubuntu 22.04 - no jemalloc workaround needed"
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Install package-specific dependencies with mk-build-deps"
+
+              if command -v mk-build-deps &> /dev/null; then
+                echo "Using mk-build-deps to install dependencies..."
+                mk-build-deps --install --remove \
+                  --tool="apt-get -o Debug::pkgProblemResolver=yes --no-install-recommends --yes" \
+                  debian/control || {
+                    echo "mk-build-deps failed, but continuing..."
+                  }
+              else
+                echo "mk-build-deps not available"
+              fi
+
+              # Check what dependencies are still missing
+              echo ""
+              echo "Checking build dependencies..."
+              dpkg-checkbuilddeps 2>&1 | tee /tmp/missing-deps.txt || {
+                echo ""
+                echo "Some dependencies are missing, attempting to install..."
+
+                if [ -f /tmp/missing-deps.txt ]; then
+                  MISSING_DEPS=$(grep "Unmet build dependencies:" /tmp/missing-deps.txt | sed "s/.*dependencies: //" | tr " " "\n" | grep -v "^$" | sed "s/(.*)//g" || true)
+
+                  if [ -n "$MISSING_DEPS" ]; then
+                    echo "Missing dependencies:"
+                    echo "$MISSING_DEPS"
+                    echo ""
+                    echo "Attempting to install missing dependencies..."
+
+                    for dep in $MISSING_DEPS; do
+                      echo "Installing $dep..."
+                      apt-get install -y "$dep" || echo "Could not install $dep"
+                    done
+                  fi
+                fi
+              }
+
+              # Final dependency check
+              echo ""
+              echo "Final dependency check:"
+              if dpkg-checkbuilddeps; then
+                echo "✓ All build dependencies satisfied"
+              else
+                echo "⚠ Some dependencies may be missing"
+                echo "Attempting to build anyway with -d flag..."
+                export USE_D_FLAG="-d"
+              fi
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Update changelog"
+
+              export DEB_VERSION="${VALKEY_VERSION}-1"
+
+              if ! grep -q "$DEB_VERSION" debian/changelog; then
+                echo "Updating changelog for ${PLATFORM_CODENAME}..."
+                DEBFULLNAME="Valkey Packaging Team" \
+                DEBEMAIL="packaging@valkey.io" \
+                dch -v "$DEB_VERSION" \
+                  -D "${PLATFORM_CODENAME}" \
+                  "Automated build for ${PLATFORM_CODENAME}"
+              fi
+
+              echo "Current changelog entry:"
+              head -5 debian/changelog
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Build Debian packages"
+
+              echo "Building packages for ${EXPECTED_ARCH}..."
+              dpkg-buildpackage -b -us -uc -a${EXPECTED_ARCH} ${USE_D_FLAG:-}
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "::group::Collect built packages"
+
+              mkdir -p /output
+              cd /root
+
+              echo "Copying built packages to /output..."
+              find . -maxdepth 1 -name "*.deb" -type f -exec cp {} /output/ \;
+              find . -maxdepth 1 -name "*.ddeb" -type f -exec cp {} /output/ \; 2>/dev/null || true
+              find . -maxdepth 1 -name "*.buildinfo" -type f -exec cp {} /output/ \;
+              find . -maxdepth 1 -name "*.changes" -type f -exec cp {} /output/ \;
+
+              echo "::endgroup::"
+              echo ""
+
+              # List built packages
+              echo "::group::Binary DEBs"
+              echo "Built packages:"
+              find /output -name "*.deb" -type f -exec ls -lh {} \;
+              echo ""
+              echo "Total packages: $(find /output -name "*.deb" -type f | wc -l)"
+              echo "::endgroup::"
+              echo ""
+
+              # Run sanity checks
+              echo "::group::Package Sanity Checks"
+
+              MAIN_DEB=$(find /output -name "valkey-server_${VALKEY_VERSION}*.deb" -type f | head -1)
+
+              if [ -z "$MAIN_DEB" ]; then
+                echo "ERROR: Main valkey-server DEB not found!"
+                echo "Available packages:"
+                find /output -name "*.deb" -type f
+                exit 1
+              fi
+
+              echo "✓ Found main package: $(basename $MAIN_DEB)"
+
+              PKG_ARCH=$(dpkg-deb --field "$MAIN_DEB" Architecture)
+              echo "Package architecture: $PKG_ARCH"
+              echo "Expected architecture: ${EXPECTED_ARCH}"
+
+              if [ "$PKG_ARCH" != "${EXPECTED_ARCH}" ] && [ "$PKG_ARCH" != "all" ]; then
+                echo "WARNING: Architecture mismatch!"
+              else
+                echo "✓ Architecture matches"
+              fi
+
+              echo ""
+              echo "Package information:"
+              dpkg-deb --info "$MAIN_DEB" | grep -E "Package|Version|Architecture|Description" || true
+
+              echo "::endgroup::"
+              echo ""
+
+              echo "============================================="
+              echo "✓ All checks passed for ${PLATFORM_ID} (${EXPECTED_ARCH})"
+              echo "============================================="
+            '
+
+      - name: List built packages
+        run: |
+          echo "Built packages:"
+          ls -lh output/
+          echo ""
+          echo "Package details:"
+          for deb in output/*.deb; do
+            if [ -f "$deb" ]; then
+              echo "---"
+              echo "File: $(basename $deb)"
+              dpkg-deb --info "$deb" | grep -E "Package|Version|Architecture" || true
+            fi
+          done
+
+      - name: Upload DEB artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}
+          path: |
+            output/*.deb
+            output/*.ddeb
+            output/*.buildinfo
+            output/*.changes
+          retention-days: 30
+
+  ############################################################################
+  # Combined Summary
+  ############################################################################
+  build-summary:
+    name: Build Summary
+    needs: [build-rpm, build-deb]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check build results
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          RPM_RESULT="${{ needs.build-rpm.result }}"
+          DEB_RESULT="${{ needs.build-deb.result }}"
+
+          if [ "$RPM_RESULT" = "success" ]; then
+            echo "✅ All RPM builds completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Some RPM builds failed (status: $RPM_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$DEB_RESULT" = "success" ]; then
+            echo "✅ All DEB builds completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Some DEB builds failed (status: $DEB_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$RPM_RESULT" != "success" ] || [ "$DEB_RESULT" != "success" ]; then
+            exit 1
+          fi
+
+      - name: Download all artifacts
+        if: success()
+        uses: actions/download-artifact@v4
+        with:
+          path: all-packages
+
+      - name: Generate artifact summary
+        if: success()
+        run: |
+          echo "## Built RPM Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in all-packages/valkey-rpms-*/; do
+            if [ -d "$dir" ]; then
+              artifact=$(basename "$dir" | sed 's/valkey-rpms-//')
+              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
+              arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
+              count=$(find "$dir" -name "*.rpm" -type f | wc -l)
+              size=$(du -sh "$dir" | cut -f1)
+              echo "| $platform | $arch | $count | $size |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Built DEB Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in all-packages/valkey-debs-*/; do
+            if [ -d "$dir" ]; then
+              artifact=$(basename "$dir" | sed 's/valkey-debs-//')
+              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
+              arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
+              count=$(find "$dir" -name "*.deb" -type f | wc -l)
+              size=$(du -sh "$dir" | cut -f1)
+              echo "| $platform | $arch | $count | $size |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts are available for download in the Actions tab." >> $GITHUB_STEP_SUMMARY

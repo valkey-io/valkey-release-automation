@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# Test basic valkey-cli connectivity.
+
+set -eu
+
+service valkey-server restart
+
+sleep 5
+
+reply=$(valkey-cli PING)
+
+if [ "$reply" != "PONG" ]; then
+    echo "FAIL: expected PONG, got '$reply'" >&2
+    exit 1
+fi
+
+echo "PASS: valkey-cli PING returned PONG"
