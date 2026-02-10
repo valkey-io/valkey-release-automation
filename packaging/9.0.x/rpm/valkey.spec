@@ -32,15 +32,19 @@
 %global valkey_modules_dir %{_libdir}/%{name}/modules
 
 %if %{with docs}
-%global doc_version 9.0.0
+%global doc_version %{version}
 %endif
 
-%global make_flags \\\
+%global build_flags \\\
     DEBUG="" \\\
-    V="echo" \\\
-    PREFIX=%{buildroot}%{_prefix} \\\
+    V=1 \\\
     BUILD_WITH_SYSTEMD=yes \\\
-    BUILD_TLS=yes
+    BUILD_TLS=yes \\\
+    USE_SYSTEM_JEMALLOC=yes
+
+%global install_flags \\\
+    %{build_flags} \\\
+    PREFIX=%{buildroot}%{_prefix}
 
 Name:           valkey
 Version:        9.0.2
@@ -49,7 +53,7 @@ Summary:        Persistent key-value database
 
 # valkey: BSD-3-Clause
 # libvalkey: BSD-3-Clause
-# hdrhistogram, jemalloc, linenoise: BSD-2-Clause
+# hdrhistogram, linenoise: BSD-2-Clause
 # lua: MIT
 # fpconv: BSL-1.0
 License:        BSD-3-Clause AND BSD-2-Clause AND MIT AND BSL-1.0
@@ -60,21 +64,19 @@ Source1:        %{name}.logrotate
 Source2:        %{name}.target
 Source3:        %{name}@.service
 Source4:        %{name}.tmpfiles.d
-Source6:        %{name}.sysctl
-Source7:        %{name}-sentinel@.service
-Source8:        %{name}-sentinel.target
-Source9:        %{name}-user.conf
-Source10:       macros.%{name}
-Source11:       migrate_redis_to_valkey.bash
-Source12:       README.SUSE
-Source13:       README.RHEL
+Source5:        %{name}.sysctl
+Source6:        %{name}-sentinel@.service
+Source7:        %{name}-sentinel.target
+Source8:        %{name}-user.conf
+Source9:        macros.%{name}
+Source10:       migrate_redis_to_valkey.bash
+Source11:       README.SUSE
+Source12:       README.RHEL
 %if %{with docs}
 Source50:       https://github.com/valkey-io/%{name}-doc/archive/%{doc_version}/%{name}-doc-%{doc_version}.tar.gz
 %endif
 
-%if 0%{?is_suse}
 Patch1001:      %{name}-conf.patch
-%endif
 
 BuildRequires:  make
 BuildRequires:  gcc
@@ -122,11 +124,11 @@ Recommends:     logrotate
 %{?sysusers_requires}
 %else
 Requires:       logrotate
+Requires(pre):  shadow-utils
 %endif
 
 # Bundled dependencies
 Provides:       bundled(libvalkey) = 1.0.0
-Provides:       bundled(jemalloc) = 5.3.0
 Provides:       bundled(lua-libs) = 5.1.5
 Provides:       bundled(linenoise) = 1.0
 Provides:       bundled(hdr_histogram) = 0.11.8
@@ -171,7 +173,7 @@ valkeymodule.h API header and RPM macros for module packaging.
 
 %package        compat-redis
 Summary:        Conversion script and compatibility symlinks for Redis
-Requires:       valkey = %{version}-%{release}
+Requires:       %{name} = %{version}-%{release}
 Requires(post): /usr/bin/find
 BuildArch:      noarch
 %if 0%{?fedora} > 40 || 0%{?rhel} > 9
@@ -188,7 +190,7 @@ that redirect to the equivalent valkey-* commands.
 
 %package        compat-redis-devel
 Summary:        Compatibility development header for Redis API Valkey modules
-Requires:       valkey-devel = %{version}-%{release}
+Requires:       %{name}-devel = %{version}-%{release}
 BuildArch:      noarch
 %if 0%{?fedora} > 40 || 0%{?rhel} > 9
 Obsoletes:      redis-devel < 7.4
@@ -221,12 +223,9 @@ Documentation and additional man pages for Valkey.
 %prep
 %setup -n %{name}-%{version} %{?with_docs:-a50}
 
-%if 0%{?is_suse}
 %patch -P1001 -p1
-%endif
 
 mv deps/lua/COPYRIGHT             COPYRIGHT-lua
-mv deps/jemalloc/COPYING          COPYING-jemalloc
 mv deps/libvalkey/COPYING         COPYING-libvalkey-BSD-3-Clause
 mv deps/hdr_histogram/LICENSE.txt LICENSE-hdrhistogram
 mv deps/hdr_histogram/COPYING.txt COPYING-hdrhistogram
@@ -246,20 +245,11 @@ if test "$api" != "%{valkey_modules_abi}"; then
    exit 1
 fi
 
-sed -i -e 's|^logfile .*$|logfile /var/log/valkey/valkey.log|g' \
-  -e 's|^# unixsocket .*$|unixsocket /run/valkey/valkey.sock|g' \
-  -e 's|^pidfile .*$|pidfile /run/valkey/valkey.pid|g' \
-  valkey.conf
-
-sed -i -e 's|^logfile .*$|logfile /var/log/valkey/sentinel.log|g' \
-  -e 's|^pidfile .*$|pidfile /run/valkey/sentinel.pid|g' \
-  sentinel.conf
-
 %build
-%make_build %{make_flags}
+%make_build %{build_flags}
 
 %if 0%{?is_suse}
-%sysusers_generate_pre %{SOURCE9} %{name}
+%sysusers_generate_pre %{SOURCE8} %{name}
 %endif
 
 %if %{with docs}
@@ -270,7 +260,7 @@ popd
 %endif
 
 %install
-%make_install %{make_flags}
+make install %{install_flags}
 
 %if %{with docs}
 pushd %{name}-doc-%{doc_version}
@@ -295,18 +285,19 @@ install -dm0755 %{buildroot}%{_conf_dir}/includes
 install -dm0755 %{buildroot}%{valkey_modules_dir}
 
 install -Dm0644 src/%{name}module.h %{buildroot}%{_includedir}/%{name}module.h
-install -Dm0644 %{SOURCE10} %{buildroot}%{_rpmmacrodir}/macros.%{name}
+install -Dm0644 %{SOURCE9} %{buildroot}%{_rpmmacrodir}/macros.%{name}
 
 install -Dm0640 valkey.conf %{buildroot}%{_conf_dir}/includes/valkey.defaults.conf
 install -Dm0640 sentinel.conf %{buildroot}%{_conf_dir}/includes/sentinel.defaults.conf
-install -Dm0640 valkey.conf %{buildroot}%{_conf_dir}/valkey.default.conf.template
-install -Dm0660 sentinel.conf %{buildroot}%{_conf_dir}/sentinel.default.conf.template
+# Install default instance configuration files
+install -Dm0640 valkey.default.conf %{buildroot}%{_conf_dir}/default.conf
+install -Dm0660 sentinel.default.conf %{buildroot}%{_conf_dir}/sentinel-default.conf
 
 # Install system configuration
 %if 0%{?is_suse}
-install -Dm0644 %{SOURCE6} %{buildroot}%{_prefix}/lib/sysctl.d/00-%{name}.conf
+install -Dm0644 %{SOURCE5} %{buildroot}%{_prefix}/lib/sysctl.d/00-%{name}.conf
 %else
-install -Dm0644 %{SOURCE6} %{buildroot}%{_sysconfdir}/sysctl.d/00-%{name}.conf
+install -Dm0644 %{SOURCE5} %{buildroot}%{_sysconfdir}/sysctl.d/00-%{name}.conf
 %endif
 
 %if 0%{?suse_version} > 1500
@@ -317,17 +308,17 @@ install -Dm0644 %{SOURCE1} %{buildroot}%{_sysconfdir}/logrotate.d/%{name}
 
 install -Dm0644 %{SOURCE2} %{buildroot}%{_unitdir}/%{name}.target
 install -Dm0644 %{SOURCE3} %{buildroot}%{_unitdir}/%{name}@.service
-install -Dm0644 %{SOURCE7} %{buildroot}%{_unitdir}/%{name}-sentinel@.service
-install -Dm0644 %{SOURCE8} %{buildroot}%{_unitdir}/%{name}-sentinel.target
+install -Dm0644 %{SOURCE6} %{buildroot}%{_unitdir}/%{name}-sentinel@.service
+install -Dm0644 %{SOURCE7} %{buildroot}%{_unitdir}/%{name}-sentinel.target
 install -Dm0644 %{SOURCE4} %{buildroot}%{_tmpfilesdir}/%{name}.conf
 
 %if 0%{?is_suse}
-install -Dm0644 %{SOURCE9} %{buildroot}%{_sysusersdir}/%{name}-user.conf
+install -Dm0644 %{SOURCE8} %{buildroot}%{_sysusersdir}/%{name}-user.conf
 %else
-install -Dm0644 %{SOURCE9} %{buildroot}%{_sysusersdir}/%{name}.conf
+install -Dm0644 %{SOURCE8} %{buildroot}%{_sysusersdir}/%{name}.conf
 %endif
 
-install -Dm0755 %{SOURCE11} %{buildroot}%{_libexecdir}/migrate_redis_to_valkey.bash
+install -Dm0755 %{SOURCE10} %{buildroot}%{_libexecdir}/migrate_redis_to_valkey.bash
 
 install -pDm644 src/redismodule.h %{buildroot}%{_includedir}/redismodule.h
 
@@ -359,9 +350,9 @@ ln -sr %{buildroot}%{_unitdir}/%{name}-sentinel@.service %{buildroot}%{_unitdir}
 chmod 755 %{buildroot}%{_bindir}/%{name}-*
 
 %if 0%{?is_suse}
-cp %{SOURCE12} README.SUSE
+cp %{SOURCE11} README.SUSE
 %else
-cp %{SOURCE13} README.RHEL
+cp %{SOURCE12} README.RHEL
 %endif
 
 %check
@@ -375,7 +366,7 @@ taskset -c 1 ./runtest --clients 50 --skiptest "Active defrag - AOF loading"
 %service_add_pre %{name}.target %{name}@.service %{name}-sentinel.target %{name}-sentinel@.service
 %else
 %pre
-%sysusers_create_compat %{SOURCE9}
+%sysusers_create_compat %{SOURCE8}
 %endif
 
 %post
@@ -421,7 +412,6 @@ EOF
 %files
 %license COPYING
 %license COPYRIGHT-lua
-%license COPYING-jemalloc
 %license LICENSE-hdrhistogram
 %license COPYING-hdrhistogram
 %license LICENSE-fpconv
@@ -464,8 +454,8 @@ EOF
 %dir %{_conf_dir}/includes
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/valkey.defaults.conf
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/sentinel.defaults.conf
-%config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/valkey.default.conf.template
-%config(noreplace) %attr(0660,root,%{name}) %{_conf_dir}/sentinel.default.conf.template
+%config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/default.conf
+%config(noreplace) %attr(0660,root,%{name}) %{_conf_dir}/sentinel-default.conf
 
 %dir %attr(0750,%{name},%{name}) %{_data_dir}
 %dir %attr(0750,%{name},%{name}) %{_data_dir}/default

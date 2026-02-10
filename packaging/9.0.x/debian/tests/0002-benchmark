@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# Test that valkey-benchmark runs successfully.
+
+set -eu
+
+service valkey-server restart
+
+sleep 5
+
+valkey-benchmark -q -n 100 -c 1 -t ping
+
+echo "PASS: valkey-benchmark completed successfully"
