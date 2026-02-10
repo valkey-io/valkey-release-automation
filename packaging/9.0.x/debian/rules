@@ -10,6 +10,8 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=+lto
 export DEB_CFLAGS_MAINT_APPEND = -I/usr/include/liblzf
 export DEB_LDFLAGS_MAINT_APPEND = -Wl,-no-as-needed -ldl -latomic -llzf
 
+VALKEY_DOC_VERSION = 9.0.0
+
 # Build jemalloc in parallel
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 	NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -23,7 +25,7 @@ endif
 override_dh_auto_clean:
 	dh_auto_clean
 	rm -f src/release.h debian/*.service
-	rm -rf valkey-doc-9.0.0 valkey-doc-9.0.0.tar.gz
+	rm -rf valkey-doc-$(VALKEY_DOC_VERSION) valkey-doc-$(VALKEY_DOC_VERSION).tar.gz
 
 override_dh_auto_build:
 	dh_auto_build -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEMD=yes USE_JEMALLOC=yes
@@ -31,15 +33,15 @@ override_dh_auto_build:
 # Build documentation if not nodoc profile
 ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
 	# Download and build valkey-doc if not present
-	if [ ! -d valkey-doc-9.0.0 ]; then \
-		if [ ! -f valkey-doc-9.0.0.tar.gz ]; then \
-			wget -q https://github.com/valkey-io/valkey-doc/archive/9.0.0/valkey-doc-9.0.0.tar.gz; \
+	if [ ! -d valkey-doc-$(VALKEY_DOC_VERSION) ]; then \
+		if [ ! -f valkey-doc-$(VALKEY_DOC_VERSION).tar.gz ]; then \
+			wget -q https://github.com/valkey-io/valkey-doc/archive/$(VALKEY_DOC_VERSION)/valkey-doc-$(VALKEY_DOC_VERSION).tar.gz; \
 		fi; \
-		tar xzf valkey-doc-9.0.0.tar.gz; \
+		tar xzf valkey-doc-$(VALKEY_DOC_VERSION).tar.gz; \
 	fi
-	if [ -d valkey-doc-9.0.0 ]; then \
-		$(MAKE) -C valkey-doc-9.0.0 VALKEY_ROOT=$(CURDIR) || true; \
-		$(MAKE) -C valkey-doc-9.0.0 html VALKEY_ROOT=$(CURDIR) || true; \
+	if [ -d valkey-doc-$(VALKEY_DOC_VERSION) ]; then \
+		$(MAKE) -C valkey-doc-$(VALKEY_DOC_VERSION) VALKEY_ROOT=$(CURDIR) || true; \
+		$(MAKE) -C valkey-doc-$(VALKEY_DOC_VERSION) html VALKEY_ROOT=$(CURDIR) || true; \
 	fi
 endif
 
@@ -62,8 +64,11 @@ override_dh_auto_install:
 	install -D -m 0755 src/valkey-server debian/tmp/usr/bin/valkey-server
 	install -D -m 0755 src/valkey-cli debian/tmp/usr/bin/valkey-cli
 	install -D -m 0755 src/valkey-benchmark debian/tmp/usr/bin/valkey-benchmark
-	install -D -m 0755 src/valkey-check-aof debian/tmp/usr/bin/valkey-check-aof
-	install -D -m 0755 src/valkey-check-rdb debian/tmp/usr/bin/valkey-check-rdb
+	# valkey-check-aof and valkey-check-rdb are the same binary as valkey-server
+	# (hardlinks in the source tree). Install as symlinks to avoid duplicate
+	# .build-id debug files that cause dbgsym package conflicts.
+	ln -sf valkey-server debian/tmp/usr/bin/valkey-check-aof
+	ln -sf valkey-server debian/tmp/usr/bin/valkey-check-rdb
 	
 	# Sentinel is a symlink
 	ln -sf valkey-server debian/tmp/usr/bin/valkey-sentinel
@@ -84,13 +89,13 @@ override_dh_auto_install:
 	
 	# Install documentation if built
 ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
-	if [ -d valkey-doc-9.0.0/_build/html ]; then \
+	if [ -d valkey-doc-$(VALKEY_DOC_VERSION)/_build/html ]; then \
 		install -d debian/tmp/usr/share/doc/valkey-doc; \
-		cp -r valkey-doc-9.0.0/_build/html/* debian/tmp/usr/share/doc/valkey-doc/; \
+		cp -r valkey-doc-$(VALKEY_DOC_VERSION)/_build/html/* debian/tmp/usr/share/doc/valkey-doc/; \
 	fi
-	if [ -d valkey-doc-9.0.0/_build/man ]; then \
+	if [ -d valkey-doc-$(VALKEY_DOC_VERSION)/_build/man ]; then \
 		install -d debian/tmp/usr/share/man; \
-		cp -r valkey-doc-9.0.0/_build/man/* debian/tmp/usr/share/man/; \
+		cp -r valkey-doc-$(VALKEY_DOC_VERSION)/_build/man/* debian/tmp/usr/share/man/; \
 	fi
 endif
 	
@@ -109,5 +114,16 @@ override_dh_compress:
 override_dh_installchangelogs:
 	dh_installchangelogs --keep 00-RELEASENOTES
 
+override_dh_installinit:
+	dh_installinit -pvalkey-server --name=valkey-server
+	dh_installinit -pvalkey-sentinel --name=valkey-sentinel
+
+override_dh_installsystemd:
+	dh_installsystemd -pvalkey-server --name=valkey-server
+	dh_installsystemd -pvalkey-server --name=valkey-server@
+	dh_installsystemd -pvalkey-sentinel --name=valkey-sentinel
+	dh_installsystemd -pvalkey-sentinel --name=valkey-sentinel@
+
 .PHONY: override_dh_auto_build override_dh_auto_install override_dh_auto_test \
-        override_dh_fixperms override_dh_compress override_dh_installchangelogs
+        override_dh_fixperms override_dh_compress override_dh_installchangelogs \
+        override_dh_installinit override_dh_installsystemd
