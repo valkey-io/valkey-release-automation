@@ -1,0 +1,4 @@
+# Configuration for Valkey
+VALKEY_MODULES_ABI=1
+VALKEY_MODULES_DIR=/usr/lib/valkey/modules
+

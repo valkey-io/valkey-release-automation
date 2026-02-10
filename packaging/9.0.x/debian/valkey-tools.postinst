@@ -1,0 +1,37 @@
+#!/bin/sh
+
+set -eu
+
+USER="valkey"
+
+Setup_dir () {
+	DIR="${1}"
+	MODE="${2}"
+	GROUP="${3}"
+
+	mkdir -pZ ${DIR}
+
+	if ! dpkg-statoverride --list ${DIR} >/dev/null 2>&1
+	then
+		chown ${USER}:${GROUP} ${DIR}
+		chmod ${MODE} ${DIR}
+	fi
+}
+
+if [ "$1" = "configure" ]
+then
+	adduser \
+		--system \
+		--home /var/lib/valkey \
+		--quiet \
+		--group \
+		${USER} || true
+
+	Setup_dir /var/log/valkey 2750 adm
+	Setup_dir /var/lib/valkey 750 ${USER}
+	Setup_dir /etc/valkey 2770 ${USER}
+fi
+
+#DEBHELPER#
+
+exit 0
