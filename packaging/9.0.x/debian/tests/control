@@ -1,0 +1,14 @@
+Tests: 0001-valkey-cli
+Restrictions: needs-root
+
+Tests: 0002-benchmark
+Restrictions: needs-root
+
+Tests: 0003-valkey-check-aof
+Restrictions: needs-root
+
+Tests: 0004-valkey-check-rdb
+Restrictions: needs-root
+
+Tests: 0005-cjson
+Restrictions: needs-root

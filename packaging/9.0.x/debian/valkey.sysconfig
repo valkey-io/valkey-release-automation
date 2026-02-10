@@ -1,0 +1,1 @@
+OPTIONS="--logfile /var/log/valkey/valkey.log --dir /var/lib/valkey --unixsocket /var/run/valkey/valkey.sock --pidfile /var/run/valkey/valkey.pid"
