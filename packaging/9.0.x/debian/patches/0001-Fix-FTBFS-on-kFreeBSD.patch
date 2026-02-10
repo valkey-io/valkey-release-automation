@@ -1,0 +1,22 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 28 Apr 2025 15:45:49 -0300
+Subject: Fix FTBFS on kFreeBSD
+
+Last-Update: 30-10-2015
+---
+ src/fmacros.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/fmacros.h b/src/fmacros.h
+index c5c8ff4..b256d12 100644
+--- a/src/fmacros.h
++++ b/src/fmacros.h
+@@ -48,7 +48,7 @@
+ #define _ALL_SOURCE
+ #endif
+ 
+-#if defined(__linux__) || defined(__OpenBSD__)
++#if defined(__linux__) || defined(__OpenBSD__) || defined(__GLIBC__)
+ #define _XOPEN_SOURCE 700
+ /*
+  * On NetBSD, _XOPEN_SOURCE undefines _NETBSD_SOURCE and
