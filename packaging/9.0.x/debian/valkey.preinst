@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+
+# Check if the valkey group exists, if not, create it
+if ! getent group valkey >/dev/null; then
+    addgroup --system valkey
+fi
+
+# Check if the valkey user exists, if not, create it
+if ! getent passwd valkey >/dev/null; then
+    adduser --system --ingroup valkey --no-create-home --disabled-login valkey
+fi
+
+exit 0
+
