@@ -8,8 +8,6 @@ Type=notify
 User=valkey
 Group=valkey
 PrivateTmp=true
-# added automatically, for details please see
-# https://en.opensuse.org/openSUSE:Security_Features#Systemd_hardening_effort
 ProtectSystem=full
 ProtectHome=true
 PrivateDevices=true
@@ -20,7 +18,10 @@ ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
 RestrictRealtime=true
-# end of automatic additions 
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
 ReadWritePaths=/etc/valkey
 PIDFile=/run/valkey/sentinel-%i.pid
 ExecStart=/usr/bin/valkey-sentinel /etc/valkey/sentinel-%i.conf
@@ -28,4 +29,4 @@ LimitNOFILE=10240
 Restart=on-failure
 
 [Install]
-WantedBy=multi-user.target valkey.target
+WantedBy=multi-user.target valkey-sentinel.target

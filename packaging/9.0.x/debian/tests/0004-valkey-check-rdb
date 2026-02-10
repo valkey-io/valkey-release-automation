@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# Test that valkey-check-rdb can validate an RDB file.
+
+set -eu
+
+service valkey-server restart
+
+sleep 5
+
+# Force an RDB save
+valkey-cli SAVE
+
+# Check the generated dump file
+rdb_file=$(valkey-cli CONFIG GET dir | sed -n '2p')/$(valkey-cli CONFIG GET dbfilename | sed -n '2p')
+
+valkey-check-rdb "$rdb_file"
+
+echo "PASS: valkey-check-rdb validated RDB successfully"
