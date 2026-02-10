@@ -3,7 +3,7 @@ name: Build Valkey Packages (RPM + DEB)
 on:
   push:
     branches:
-      - pipeline
+      - main
     paths:
       - 'packaging/9.0.x/**'
       - '.github/workflows/build_packages.yml'
