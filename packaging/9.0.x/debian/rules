@@ -1,0 +1,113 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
+export BUILD_TLS = yes
+export CFLAGS CPPFLAGS LDFLAGS
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=+lto
+export DEB_CFLAGS_MAINT_APPEND = -I/usr/include/liblzf
+export DEB_LDFLAGS_MAINT_APPEND = -Wl,-no-as-needed -ldl -latomic -llzf
+
+# Build jemalloc in parallel
+ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+	NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
+	MAKEFLAGS += -j$(NUMJOBS)
+	export MAKEFLAGS
+endif
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -f src/release.h debian/*.service
+	rm -rf valkey-doc-9.0.0 valkey-doc-9.0.0.tar.gz
+
+override_dh_auto_build:
+	dh_auto_build -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEMD=yes USE_JEMALLOC=yes
+
+# Build documentation if not nodoc profile
+ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
+	# Download and build valkey-doc if not present
+	if [ ! -d valkey-doc-9.0.0 ]; then \
+		if [ ! -f valkey-doc-9.0.0.tar.gz ]; then \
+			wget -q https://github.com/valkey-io/valkey-doc/archive/9.0.0/valkey-doc-9.0.0.tar.gz; \
+		fi; \
+		tar xzf valkey-doc-9.0.0.tar.gz; \
+	fi
+	if [ -d valkey-doc-9.0.0 ]; then \
+		$(MAKE) -C valkey-doc-9.0.0 VALKEY_ROOT=$(CURDIR) || true; \
+		$(MAKE) -C valkey-doc-9.0.0 html VALKEY_ROOT=$(CURDIR) || true; \
+	fi
+endif
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	# Generate a root CA and server certificate for testing
+	./utils/gen-test-certs.sh
+	# Avoid race conditions in upstream testsuite
+	./runtest --clients 1 --verbose --dump-logs --tls || true
+	timeout 30m ./runtest-cluster --tls || true
+	./runtest-sentinel || true
+	# Clean up after gen-test-certs.sh
+	rm -rf tests/tls || true
+	# Other cleanup
+	find tests/tmp ! -name .gitignore -type f -exec rm -rfv {} +
+endif
+
+override_dh_auto_install:
+	# Install binaries
+	install -D -m 0755 src/valkey-server debian/tmp/usr/bin/valkey-server
+	install -D -m 0755 src/valkey-cli debian/tmp/usr/bin/valkey-cli
+	install -D -m 0755 src/valkey-benchmark debian/tmp/usr/bin/valkey-benchmark
+	install -D -m 0755 src/valkey-check-aof debian/tmp/usr/bin/valkey-check-aof
+	install -D -m 0755 src/valkey-check-rdb debian/tmp/usr/bin/valkey-check-rdb
+	
+	# Sentinel is a symlink
+	ln -sf valkey-server debian/tmp/usr/bin/valkey-sentinel
+	
+	# Install configuration files
+	install -D -m 0640 valkey.conf debian/tmp/etc/valkey/valkey.conf
+	install -D -m 0640 sentinel.conf debian/tmp/etc/valkey/sentinel.conf
+	
+	# Install development headers
+	install -D -m 0644 src/valkeymodule.h debian/tmp/usr/include/valkeymodule.h
+	install -D -m 0644 src/redismodule.h debian/tmp/usr/include/redismodule.h
+	
+	# Create Redis compatibility symlinks
+	for bin in valkey-server valkey-cli valkey-benchmark valkey-check-aof valkey-check-rdb valkey-sentinel; do \
+		redisbin=$$(echo $$bin | sed 's/valkey/redis/'); \
+		ln -sf $$bin debian/tmp/usr/bin/$$redisbin; \
+	done
+	
+	# Install documentation if built
+ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
+	if [ -d valkey-doc-9.0.0/_build/html ]; then \
+		install -d debian/tmp/usr/share/doc/valkey-doc; \
+		cp -r valkey-doc-9.0.0/_build/html/* debian/tmp/usr/share/doc/valkey-doc/; \
+	fi
+	if [ -d valkey-doc-9.0.0/_build/man ]; then \
+		install -d debian/tmp/usr/share/man; \
+		cp -r valkey-doc-9.0.0/_build/man/* debian/tmp/usr/share/man/; \
+	fi
+endif
+	
+	# Generate systemd service files
+	debian/bin/generate-systemd-service-files
+
+override_dh_fixperms:
+	dh_fixperms
+	# Configuration files should be readable by valkey group only
+	chmod 0640 debian/valkey-server/etc/valkey/valkey.conf || true
+	chmod 0640 debian/valkey-sentinel/etc/valkey/sentinel.conf || true
+
+override_dh_compress:
+	dh_compress -Xredis-trib.rb
+
+override_dh_installchangelogs:
+	dh_installchangelogs --keep 00-RELEASENOTES
+
+.PHONY: override_dh_auto_build override_dh_auto_install override_dh_auto_test \
+        override_dh_fixperms override_dh_compress override_dh_installchangelogs
