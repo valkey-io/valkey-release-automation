@@ -1,4 +1,4 @@
-name: Trigger Automation for Docker update
+name: Update Valkey Container
 
 on:
   workflow_call:
@@ -147,4 +147,5 @@ jobs:
           title: "Update to version ${{ inputs.version }}"
           body: |
             This pull request updates the repository to version `${{ inputs.version }}`.
-            Please review the changes and merge when appropriate.
+
+            This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)

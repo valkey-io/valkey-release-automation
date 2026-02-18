@@ -1,4 +1,4 @@
-name: Update Website Downloads
+name: Update Valkey Website
 
 on:
   workflow_call:
@@ -136,4 +136,4 @@ jobs:
             ${{ steps.update-website.outputs.has_changes == 'true' && format('- Updated downloads page with new release information') || '' }}
             ${{ steps.update-try-valkey.outputs.has_try_valkey_changes == 'true' && format('- Updated Try Valkey page to use version {0}', inputs.version) || '' }}
 
-            Please review the changes and merge when appropriate.
+            This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)

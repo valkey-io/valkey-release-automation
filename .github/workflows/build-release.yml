@@ -1,4 +1,4 @@
-name: Build Release new version
+name: Build Release New Version
 
 on:
   repository_dispatch:
@@ -98,12 +98,12 @@ jobs:
     secrets:
       PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
 
-  update-docker:
+  update-valkey-container:
     needs:
       - process-inputs
       - update-valkey-hashes
     if: needs.process-inputs.outputs.environment == 'prod'
-    uses: ./.github/workflows/update-docker.yml
+    uses: ./.github/workflows/update-valkey-container.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
     secrets:
@@ -174,17 +174,17 @@ jobs:
       region: us-west-2
     secrets: inherit
 
-  update-website-downloads:
+  update-valkey-website:
     needs:
       - process-inputs
       - update-valkey-hashes
-      - update-docker
+      - update-valkey-container
       - update-try-valkey
     if: needs.process-inputs.outputs.environment == 'prod'
-    uses: ./.github/workflows/update-website-downloads.yml
+    uses: ./.github/workflows/update-valkey-website.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
-      bashbrew_json: ${{ needs.update-docker.outputs.bashbrew_output }}
+      bashbrew_json: ${{ needs.update-valkey-container.outputs.bashbrew_output }}
       try_valkey_uploaded: ${{ needs.update-try-valkey.outputs.try_valkey_uploaded }}
     secrets:
       PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
@@ -192,7 +192,7 @@ jobs:
   trigger-valkey-bundle:
     needs:
       - process-inputs
-      - update-docker
+      - update-valkey-container
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Valkey Bundle Update
