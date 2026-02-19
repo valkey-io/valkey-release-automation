@@ -1,4 +1,4 @@
-name: Builds Linux X86 binary packages into S3 bucket.
+name: Build Linux X86 binary packages into S3 bucket
 
 on:
   workflow_call:
