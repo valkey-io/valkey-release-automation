@@ -1,0 +1,5 @@
+# Command reference man pages (section 3)
+usr/share/man/man3/*.gz
+
+# Topic man pages (section 7)  
+usr/share/man/man7/*.gz
