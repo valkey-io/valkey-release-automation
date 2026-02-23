@@ -16,13 +16,13 @@ do
 		case "${MODE}" in
 		default)
 			EXTRA="Alias=${NAME}.service"
-			TARGET="debian/${BINARY}.service"
+			TARGET="debian/${BINARY}.${BINARY}.service"
 			NAMESPACED="${NAME}"
 			DESCRIPTION="Advanced key-value store"
 			;;
 		templated)
 			EXTRA=""
-			TARGET="debian/${BINARY}@.service"
+			TARGET="debian/${BINARY}.${BINARY}@.service"
 			NAMESPACED="${NAME}-%i"
 			DESCRIPTION="Advanced key-value store (%I)"
 			;;
