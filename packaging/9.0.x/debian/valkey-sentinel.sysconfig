@@ -1,0 +1,1 @@
+OPTIONS="--logfile /var/log/valkey/sentinel.log --unixsocket /var/run/valkey/sentinel.sock --pidfile /var/run/valkey/sentinel.pid"

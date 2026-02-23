@@ -1,0 +1,17 @@
+[Unit]
+Description=Valkey Sentinel
+After=network.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=-/etc/sysconfig/valkey-sentinel
+ExecStart=/usr/bin/valkey-sentinel /etc/valkey/sentinel.conf --daemonize no --supervised systemd $OPTIONS
+Type=notify
+User=valkey
+Group=valkey
+RuntimeDirectory=valkey
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

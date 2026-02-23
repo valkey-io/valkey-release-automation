@@ -1,0 +1,5 @@
+debian-packaging/0001-Set-Debian-configuration-defaults.patch
+0001-Fix-FTBFS-on-kFreeBSD.patch
+0002-Add-CPPFLAGS-to-upstream-makefiles.patch
+0003-Use-get_current_dir_name-over-PATHMAX.patch
+0004-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch

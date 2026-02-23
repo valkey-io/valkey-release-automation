@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+# Reload systemd to remove any traces of the services
+systemctl daemon-reload
+
+# Cleanup if needed
+if [ "$1" = "purge" ]; then
+    # Additional cleanup can go here
+    echo "Purging configuration..."
+fi
+
+exit 0
+

@@ -1,0 +1,4 @@
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/valkey
+ExecStart=/usr/bin/valkey --modules-dir $VALKEY_MODULES_DIR
