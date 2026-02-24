@@ -124,6 +124,9 @@ override_dh_installsystemd:
 	dh_installsystemd -pvalkey-sentinel --name=valkey-sentinel
 	dh_installsystemd -pvalkey-sentinel --name=valkey-sentinel@
 
+override_dh_builddeb:
+	dh_builddeb -- -Zxz
+
 .PHONY: override_dh_auto_build override_dh_auto_install override_dh_auto_test \
         override_dh_fixperms override_dh_compress override_dh_installchangelogs \
-        override_dh_installinit override_dh_installsystemd
+        override_dh_installinit override_dh_installsystemd override_dh_builddeb
