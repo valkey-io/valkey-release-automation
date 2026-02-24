@@ -366,7 +366,15 @@ taskset -c 1 ./runtest --clients 50 --skiptest "Active defrag - AOF loading"
 %service_add_pre %{name}.target %{name}@.service %{name}-sentinel.target %{name}-sentinel@.service
 %else
 %pre
+%if 0%{?sysusers_create_compat:1}
 %sysusers_create_compat %{SOURCE8}
+%else
+getent group valkey &>/dev/null || groupadd -r valkey
+getent passwd valkey &>/dev/null || \
+    useradd -r -g valkey -d /var/lib/valkey -s /sbin/nologin \
+    -c "User for valkey key-value store" valkey
+exit 0
+%endif
 %endif
 
 %post
