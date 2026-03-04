@@ -1,0 +1,137 @@
+#!/bin/sh
+
+for BINARY in valkey-server valkey-sentinel
+do
+	for MODE in default templated
+	do
+		case "${BINARY}" in
+		valkey-server)
+			NAME="valkey"
+			;;
+		valkey-sentinel)
+			NAME="sentinel"
+			;;
+		esac
+
+		case "${MODE}" in
+		default)
+			EXTRA="Alias=${NAME}.service"
+			TARGET="debian/${BINARY}.${BINARY}.service"
+			NAMESPACED="${NAME}"
+			DESCRIPTION="Advanced key-value store"
+			;;
+		templated)
+			EXTRA=""
+			TARGET="debian/${BINARY}.${BINARY}@.service"
+			NAMESPACED="${NAME}-%i"
+			DESCRIPTION="Advanced key-value store (%I)"
+			;;
+		esac
+
+		: >${TARGET}
+
+		if [ "${MODE}" = "templated" ]
+		then
+			cat >> ${TARGET} <<EOF
+# Templated service file for ${BINARY}(1)
+#
+# Each instance of ${BINARY} requires its own configuration file:
+#
+#   $ cp /etc/valkey/${NAME}.conf /etc/valkey/${NAME}-myname.conf
+#   $ chown valkey:valkey /etc/valkey/${NAME}-myname.conf
+#
+# Ensure each instance is using their own database:
+#
+#   $ sed -i -e 's@^dbfilename .*@dbfilename dump-myname.rdb@' /etc/valkey/${NAME}-myname.conf
+#
+# We then listen exlusively on UNIX sockets to avoid TCP port collisions:
+#
+#   $ sed -i -e 's@^port .*@port 0@' /etc/valkey/${NAME}-myname.conf
+#   $ sed -i -e 's@^\\(# \\)\\{0,1\\}unixsocket .*@unixsocket /run/${NAME}-myname/${BINARY}.sock@' /etc/valkey/${NAME}-myname.conf
+#
+# ... and ensure we are logging, etc. in a unique location:
+#
+#   $ sed -i -e 's@^logfile .*@logfile /var/log/valkey/${BINARY}-myname.log@' /etc/valkey/${NAME}-myname.conf
+#   $ sed -i -e 's@^pidfile .*@pidfile /run/valkey-myname/${BINARY}.pid@' /etc/valkey/${NAME}-myname.conf
+#
+# We can then start the service as follows, validating we are using our own
+# configuration:
+#
+#   $ systemctl start ${BINARY}@myname.service
+#   $ valkey-cli -s /run/${NAME}-myname/${BINARY}.sock info | grep config_file
+#
+#  -- Lucas Kanashiro <kanashiro@debian.org>  Wed, 26 Jun 2024 18:17:24 -0300
+EOF
+		fi
+
+		cat >> ${TARGET} <<EOF
+[Unit]
+Description=${DESCRIPTION}
+After=network.target
+Documentation=https://valkey.io/docs/, man:${BINARY}(1)
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/${BINARY} /etc/valkey/${NAMESPACED}.conf --supervised systemd --daemonize no
+PIDFile=/run/${NAMESPACED}/${BINARY}.pid
+TimeoutStopSec=0
+Restart=always
+User=valkey
+Group=valkey
+RuntimeDirectory=${NAMESPACED}
+RuntimeDirectoryMode=2755
+
+UMask=007
+PrivateTmp=true
+LimitNOFILE=65535
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=-/var/lib/valkey
+ReadWritePaths=-/var/log/valkey
+ReadWritePaths=-/var/run/${NAMESPACED}
+
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+NoNewPrivileges=true
+PrivateUsers=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+RemoveIPC=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~ @privileged @resources
+
+# ${BINARY} can write to its own config file when in cluster mode so we
+# permit writing there by default. If you are not using this feature, it is
+# recommended that you remove this line.
+ReadWriteDirectories=-/etc/valkey
+
+# This restricts this service from executing binaries other than ${BINARY}
+# itself. This is really effective at e.g. making it impossible to an
+# attacker to spawn a shell on the system, but might be more restrictive
+# than desired. If you need to, you can permit the execution of extra
+# binaries by adding an extra ExecPaths= directive with the command
+# systemctl edit ${BINARY}.service
+NoExecPaths=/
+ExecPaths=/usr/bin/${BINARY} /usr/lib /lib
+
+[Install]
+WantedBy=multi-user.target
+EOF
+		if [ "${EXTRA}" != "" ]
+		then
+			echo "${EXTRA}" >> "${TARGET}"
+		fi
+	done
+done

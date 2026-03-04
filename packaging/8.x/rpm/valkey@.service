@@ -1,0 +1,31 @@
+[Unit]
+Description=Valkey instance: %i
+After=network.target
+PartOf=valkey.target
+
+[Service]
+Type=notify
+User=valkey
+Group=valkey
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+PrivateDevices=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictRealtime=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+PIDFile=/run/valkey/%i.pid
+ExecStart=/usr/bin/valkey-server /etc/valkey/%i.conf
+LimitNOFILE=10240
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target valkey.target

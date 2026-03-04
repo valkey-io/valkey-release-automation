@@ -1,36 +1,52 @@
 name: Build Valkey Packages (RPM + DEB)
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'packaging/9.0.x/**'
-      - '.github/workflows/build_packages.yml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'packaging/9.0.x/**'
-      - '.github/workflows/build_packages.yml'
+  workflow_call:
+    inputs:
+      version:
+        description: 'Valkey version to build packages for (e.g., 9.0.3)'
+        required: true
+        type: string
   workflow_dispatch:
-
-env:
-  VALKEY_VERSION: "9.0.2"
+    inputs:
+      version:
+        description: 'Valkey version to build packages for (e.g., 9.0.3)'
+        required: true
+        type: string
 
 jobs:
+  ############################################################################
+  # Process Inputs
+  ############################################################################
+  process-inputs:
+    name: Process Inputs
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      packaging_dir: ${{ steps.derive.outputs.packaging_dir }}
+    steps:
+      - name: Derive packaging directory from version
+        id: derive
+        run: |
+          VERSION="${{ inputs.version }}"
+          MAJOR="${VERSION%%.*}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "packaging_dir=${MAJOR}.x" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+          echo "Packaging directory: ${MAJOR}.x"
+
   ############################################################################
   # RPM Builds
   ############################################################################
   build-rpm:
-    name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }})
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
+    name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    needs: process-inputs
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
       fail-fast: false
       matrix:
-        # arch: [x86_64, aarch64]
-        arch: [x86_64]
+        arch: [x86_64, aarch64]
         platform:
           # SUSE/openSUSE
           - name: "openSUSE Leap 15.5"
@@ -135,15 +151,16 @@ jobs:
       - name: Build RPM in container
         run: |
           DOCKER_PLATFORM="linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}"
+          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
 
           docker run --rm \
             --platform="$DOCKER_PLATFORM" \
             -e PLATFORM_FAMILY="${{ matrix.platform.family }}" \
             -e PLATFORM_ID="${{ matrix.platform.id }}" \
             -e EPEL_PACKAGE="${{ matrix.platform.epel }}" \
-            -e VALKEY_VERSION="${{ env.VALKEY_VERSION }}" \
+            -e VALKEY_VERSION="${VALKEY_VERSION}" \
             -e EXPECTED_ARCH="${{ matrix.arch }}" \
-            -v "${{ github.workspace }}/packaging/9.0.x/rpm:/packaging:ro" \
+            -v "${{ github.workspace }}/packaging/${{ needs.process-inputs.outputs.packaging_dir }}/rpm:/packaging:ro" \
             -v "$(pwd)/output:/output" \
             ${{ matrix.platform.container }} \
             bash -c '
@@ -152,6 +169,7 @@ jobs:
               echo "============================================="
               echo "Building on $(cat /etc/os-release | grep PRETTY_NAME | cut -d\" -f2)"
               echo "Architecture: ${EXPECTED_ARCH}"
+              echo "Valkey Version: ${VALKEY_VERSION}"
               echo "============================================="
               echo ""
 
@@ -211,6 +229,7 @@ jobs:
                   gcc \
                   make \
                   jemalloc-devel \
+                  openssl \
                   openssl-devel \
                   pkgconfig \
                   procps-ng \
@@ -257,9 +276,7 @@ jobs:
               mkdir -p $BUILD_ROOT/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
               # Copy spec file
-              if [ -f "$PACKAGING_DIR/valkey-9.0.spec" ]; then
-                cp "$PACKAGING_DIR/valkey-9.0.spec" $BUILD_ROOT/SPECS/valkey.spec
-              elif [ -f "$PACKAGING_DIR/valkey.spec" ]; then
+              if [ -f "$PACKAGING_DIR/valkey.spec" ]; then
                 cp "$PACKAGING_DIR/valkey.spec" $BUILD_ROOT/SPECS/valkey.spec
               else
                 echo "ERROR: Cannot find spec file"
@@ -268,8 +285,6 @@ jobs:
               fi
 
               # Copy all source files
-              cp "$PACKAGING_DIR"/valkey-9.0.2.tar.gz $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "Main source not in repo"
-              cp "$PACKAGING_DIR"/valkey-doc-9.0.0.tar.gz $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "Doc source not in repo"
               cp "$PACKAGING_DIR"/valkey.logrotate $BUILD_ROOT/SOURCES/ || echo "No logrotate file"
               cp "$PACKAGING_DIR"/valkey*.service $BUILD_ROOT/SOURCES/ || echo "No service files"
               cp "$PACKAGING_DIR"/valkey*.target $BUILD_ROOT/SOURCES/ || echo "No target files"
@@ -284,6 +299,11 @@ jobs:
               cp "$PACKAGING_DIR"/README.SUSE $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "No README.SUSE (not critical)"
               cp "$PACKAGING_DIR"/README.RHEL $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "No README.RHEL (not critical)"
 
+              # Override version fields in spec to match input version
+              sed -i "s/^Version:.*/Version:        ${VALKEY_VERSION}/" $BUILD_ROOT/SPECS/valkey.spec
+              DOC_VERSION=$(echo "${VALKEY_VERSION}" | sed "s/\.[0-9]*$/.0/")
+              sed -i "s/^%global doc_version.*/%global doc_version ${DOC_VERSION}/" $BUILD_ROOT/SPECS/valkey.spec
+
               echo "::endgroup::"
               echo ""
 
@@ -297,14 +317,21 @@ jobs:
                 wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}/valkey-${VALKEY_VERSION}.tar.gz
               fi
 
+              # Extract doc_version from spec file
+              DOC_VERSION=$(grep "^%global doc_version" $BUILD_ROOT/SPECS/valkey.spec | awk "{print \$3}" || echo "${VALKEY_VERSION}")
+              # If doc_version references %{version}, use VALKEY_VERSION
+              if [ "$DOC_VERSION" = "%{version}" ] || [ -z "$DOC_VERSION" ]; then
+                DOC_VERSION="${VALKEY_VERSION}"
+              fi
+
               # Always download docs (spec %prep needs it even if not building docs)
-              if [ ! -f "valkey-doc-9.0.0.tar.gz" ]; then
-                echo "Downloading Valkey documentation..."
-                wget -q https://github.com/valkey-io/valkey-doc/archive/9.0.0/valkey-doc-9.0.0.tar.gz || {
+              if [ ! -f "valkey-doc-${DOC_VERSION}.tar.gz" ]; then
+                echo "Downloading Valkey documentation (${DOC_VERSION})..."
+                wget -q https://github.com/valkey-io/valkey-doc/archive/${DOC_VERSION}/valkey-doc-${DOC_VERSION}.tar.gz || {
                   echo "Doc download failed, creating dummy tarball..."
-                  mkdir -p valkey-doc-9.0.0
-                  tar czf valkey-doc-9.0.0.tar.gz valkey-doc-9.0.0
-                  rm -rf valkey-doc-9.0.0
+                  mkdir -p valkey-doc-${DOC_VERSION}
+                  tar czf valkey-doc-${DOC_VERSION}.tar.gz valkey-doc-${DOC_VERSION}
+                  rm -rf valkey-doc-${DOC_VERSION}
                 }
               fi
 
@@ -438,14 +465,14 @@ jobs:
   # DEB Builds
   ############################################################################
   build-deb:
-    name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }})
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-latest' }}
+    name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    needs: process-inputs
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
       fail-fast: false
       matrix:
-        # arch: [amd64, arm64]
-        arch: [amd64]
+        arch: [amd64, arm64]
         platform:
           # Debian
           - name: "Debian 11 (Bullseye)"
@@ -487,15 +514,16 @@ jobs:
       - name: Build DEB in container
         run: |
           DOCKER_PLATFORM="linux/${{ matrix.arch }}"
+          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
 
           docker run --rm \
             --platform="$DOCKER_PLATFORM" \
             -e PLATFORM_ID="${{ matrix.platform.id }}" \
             -e PLATFORM_CODENAME="${{ matrix.platform.codename }}" \
-            -e VALKEY_VERSION="${{ env.VALKEY_VERSION }}" \
+            -e VALKEY_VERSION="${VALKEY_VERSION}" \
             -e EXPECTED_ARCH="${{ matrix.arch }}" \
             -e DEBIAN_FRONTEND=noninteractive \
-            -v "${{ github.workspace }}/packaging/9.0.x/debian:/packaging:ro" \
+            -v "${{ github.workspace }}/packaging/${{ needs.process-inputs.outputs.packaging_dir }}/debian:/packaging:ro" \
             -v "$(pwd)/output:/output" \
             ${{ matrix.platform.container }} \
             bash -c '
@@ -504,6 +532,7 @@ jobs:
               echo "============================================="
               echo "Building on $(cat /etc/os-release | grep PRETTY_NAME | cut -d\" -f2)"
               echo "Architecture: ${EXPECTED_ARCH}"
+              echo "Valkey Version: ${VALKEY_VERSION}"
               echo "============================================="
               echo ""
 
@@ -633,6 +662,14 @@ jobs:
               echo "::endgroup::"
               echo ""
 
+              echo "::group::Override doc version in debian/rules"
+
+              DOC_VERSION=$(echo "${VALKEY_VERSION}" | sed "s/\.[0-9]*$/.0/")
+              sed -i "s/^VALKEY_DOC_VERSION = .*/VALKEY_DOC_VERSION = ${DOC_VERSION}/" debian/rules
+
+              echo "::endgroup::"
+              echo ""
+
               echo "::group::Fix debhelper compat level conflict"
 
               if grep -q "debhelper-compat" debian/control; then
@@ -730,12 +767,12 @@ jobs:
 
               echo "::group::Update changelog"
 
-              export DEB_VERSION="${VALKEY_VERSION}-1"
+              export DEB_VERSION="${VALKEY_VERSION}-1.${PLATFORM_CODENAME}"
 
               if ! grep -q "$DEB_VERSION" debian/changelog; then
                 echo "Updating changelog for ${PLATFORM_CODENAME}..."
-                DEBFULLNAME="Valkey Packaging Team" \
-                DEBEMAIL="packaging@valkey.io" \
+                DEBFULLNAME="Evgeniy Patlan" \
+                DEBEMAIL="evgeniy.patlan@percona.com" \
                 dch -v "$DEB_VERSION" \
                   -D "${PLATFORM_CODENAME}" \
                   "Automated build for ${PLATFORM_CODENAME}"
@@ -844,7 +881,7 @@ jobs:
   ############################################################################
   build-summary:
     name: Build Summary
-    needs: [build-rpm, build-deb]
+    needs: [process-inputs, build-rpm, build-deb]
     runs-on: ubuntu-latest
     if: always()
 
@@ -886,34 +923,36 @@ jobs:
         run: |
           echo "## Built RPM Packages" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Architecture | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Version | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|---------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          VERSION="${{ needs.process-inputs.outputs.version }}"
 
           for dir in all-packages/valkey-rpms-*/; do
             if [ -d "$dir" ]; then
               artifact=$(basename "$dir" | sed 's/valkey-rpms-//')
-              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
               arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
+              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
               count=$(find "$dir" -name "*.rpm" -type f | wc -l)
               size=$(du -sh "$dir" | cut -f1)
-              echo "| $platform | $arch | $count | $size |" >> $GITHUB_STEP_SUMMARY
+              echo "| $platform | $arch | $VERSION | $count | $size |" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Built DEB Packages" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Architecture | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Version | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|---------|----------|------------|" >> $GITHUB_STEP_SUMMARY
 
           for dir in all-packages/valkey-debs-*/; do
             if [ -d "$dir" ]; then
               artifact=$(basename "$dir" | sed 's/valkey-debs-//')
-              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
               arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
+              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
               count=$(find "$dir" -name "*.deb" -type f | wc -l)
               size=$(du -sh "$dir" | cut -f1)
-              echo "| $platform | $arch | $count | $size |" >> $GITHUB_STEP_SUMMARY
+              echo "| $platform | $arch | $VERSION | $count | $size |" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
