@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+# Ensure the systemd daemon is reloaded to recognize new units
+systemctl daemon-reload
+
+# Enable and start valkey services
+systemctl enable valkey.service
+systemctl start valkey.service
+
+systemctl enable valkey-sentinel.service
+systemctl start valkey-sentinel.service
+exit 0
+

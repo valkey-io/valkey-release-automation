@@ -1,0 +1,5 @@
+valkey (8.1.6-1) unstable; urgency=medium
+
+  * Package Valkey 8.1.6 for 8.1.x release line
+
+ -- Evgeniy Patlan <evgeniy.patlan@percona.com>  Wed, 04 Mar 2026 08:00:00 +0000

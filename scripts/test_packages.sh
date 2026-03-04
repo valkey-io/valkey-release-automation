@@ -24,12 +24,21 @@ SKIPPED_TESTS=()
 INSTALLED_PKGS=()
 PKG_PREFIX=""  # "valkey" or "percona-valkey", auto-detected
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-RESET='\033[0m'
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    CYAN='\033[0;36m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    CYAN=''
+    BOLD=''
+    RESET=''
+fi
 
 ###############################################################################
 # Utility functions
@@ -164,6 +173,18 @@ assert_command_output_contains() {
         pass "$label"
     else
         fail "$label (expected output containing '$expected', got: '$output')"
+    fi
+}
+
+assert_systemd_property() {
+    local service="$1" property="$2" expected="$3" label="${4:-}"
+    [[ -z "$label" ]] && label="$service $property=$expected"
+    local actual
+    actual="$(systemctl show "$service" --property="$property" --value 2>/dev/null)" || true
+    if [[ "$actual" == "$expected" ]]; then
+        pass "$label"
+    else
+        fail "$label (got: $actual)"
     fi
 }
 
@@ -419,6 +440,461 @@ test_config_files() {
         assert_file_exists /etc/valkey/sentinel-default.conf "sentinel-default.conf"
         assert_owner /etc/valkey/sentinel-default.conf "root:valkey" "sentinel-default.conf"
         assert_perms /etc/valkey/sentinel-default.conf 660 "sentinel-default.conf"
+    fi
+}
+
+test_systemd_unit_files() {
+    section_header "Test: Systemd Unit Files"
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping unit file tests"
+        return
+    fi
+
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        assert_file_exists /lib/systemd/system/valkey-server.service "valkey-server.service"
+        assert_file_exists /lib/systemd/system/valkey-server@.service "valkey-server@.service (templated)"
+        assert_file_exists /lib/systemd/system/valkey-sentinel.service "valkey-sentinel.service"
+        assert_file_exists /lib/systemd/system/valkey-sentinel@.service "valkey-sentinel@.service (templated)"
+    else
+        assert_file_exists /usr/lib/systemd/system/valkey@.service "valkey@.service"
+        assert_file_exists /usr/lib/systemd/system/valkey-sentinel@.service "valkey-sentinel@.service"
+        assert_file_exists /usr/lib/systemd/system/valkey.target "valkey.target"
+        assert_file_exists /usr/lib/systemd/system/valkey-sentinel.target "valkey-sentinel.target"
+        assert_file_exists /usr/lib/tmpfiles.d/valkey.conf "tmpfiles.d/valkey.conf"
+        if [[ -f /usr/lib/sysctl.d/00-valkey.conf ]]; then
+            pass "sysctl.d/00-valkey.conf exists"
+        elif [[ -f /etc/sysctl.d/00-valkey.conf ]]; then
+            pass "sysctl.d/00-valkey.conf exists (in /etc)"
+        else
+            fail "sysctl.d/00-valkey.conf exists (not found in /usr/lib or /etc)"
+        fi
+    fi
+}
+
+test_systemd_service_hardening() {
+    section_header "Test: Systemd Service Hardening"
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping service hardening tests"
+        return
+    fi
+
+    local server_service
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        server_service="valkey-server"
+    else
+        server_service="valkey@default"
+    fi
+
+    # Detect systemd version for feature-gating
+    local sd_ver
+    sd_ver=$(systemctl --version 2>/dev/null | head -1 | awk '{print $2}')
+    sd_ver=${sd_ver:-0}
+
+    # Common properties (both deb and rpm)
+    local common_props=(
+        "Type:notify"
+        "User:valkey"
+        "Group:valkey"
+        "PrivateTmp:yes"
+        "ProtectHome:yes"
+        "PrivateDevices:yes"
+        "ProtectKernelTunables:yes"
+        "ProtectKernelModules:yes"
+        "ProtectControlGroups:yes"
+        "NoNewPrivileges:yes"
+        "RestrictNamespaces:yes"
+        "RestrictSUIDSGID:yes"
+        "RestrictRealtime:yes"
+    )
+
+    # ProtectHostname requires systemd >= 242
+    if [[ "$sd_ver" -ge 242 ]]; then
+        common_props+=("ProtectHostname:yes")
+    else
+        skip "ProtectHostname (systemd $sd_ver < 242)"
+    fi
+
+    # ProtectKernelLogs requires systemd >= 244
+    if [[ "$sd_ver" -ge 244 ]]; then
+        common_props+=("ProtectKernelLogs:yes")
+    else
+        skip "ProtectKernelLogs (systemd $sd_ver < 244)"
+    fi
+
+    # ProtectClock requires systemd >= 247
+    if [[ "$sd_ver" -ge 247 ]]; then
+        common_props+=("ProtectClock:yes")
+    else
+        skip "ProtectClock (systemd $sd_ver < 247)"
+    fi
+
+    for entry in "${common_props[@]}"; do
+        local prop="${entry%%:*}" expected="${entry#*:}"
+        assert_systemd_property "$server_service" "$prop" "$expected"
+    done
+
+    # Deb-specific properties
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        assert_systemd_property "$server_service" "ProtectSystem" "strict"
+        assert_systemd_property "$server_service" "LimitNOFILE" "65535"
+        assert_systemd_property "$server_service" "LimitNOFILESoft" "65535"
+        assert_systemd_property "$server_service" "MemoryDenyWriteExecute" "yes"
+        assert_systemd_property "$server_service" "PrivateUsers" "yes"
+        assert_systemd_property "$server_service" "LockPersonality" "yes"
+        assert_systemd_property "$server_service" "Restart" "always"
+    fi
+
+    # RPM-specific properties
+    if [[ "$OS_FAMILY" == "rpm" ]]; then
+        assert_systemd_property "$server_service" "ProtectSystem" "full"
+        assert_systemd_property "$server_service" "LimitNOFILE" "10240"
+        assert_systemd_property "$server_service" "LimitNOFILESoft" "10240"
+        assert_systemd_property "$server_service" "Restart" "on-failure"
+    fi
+}
+
+test_systemd_enable_disable() {
+    section_header "Test: Systemd Enable/Disable"
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping enable/disable tests"
+        return
+    fi
+
+    local server_service sentinel_service
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        server_service="valkey-server"
+        sentinel_service="valkey-sentinel"
+    else
+        server_service="valkey@default"
+        sentinel_service="valkey-sentinel@default"
+    fi
+
+    for svc in "$server_service" "$sentinel_service"; do
+        # Enable
+        if systemctl enable "$svc" >/dev/null 2>&1; then
+            pass "systemctl enable $svc"
+        else
+            fail "systemctl enable $svc"
+        fi
+
+        local state
+        state="$(systemctl is-enabled "$svc" 2>/dev/null)" || true
+        if [[ "$state" == "enabled" ]]; then
+            pass "$svc is enabled"
+        else
+            fail "$svc is enabled (got: $state)"
+        fi
+
+        # Disable
+        if systemctl disable "$svc" >/dev/null 2>&1; then
+            pass "systemctl disable $svc"
+        else
+            fail "systemctl disable $svc"
+        fi
+
+        state="$(systemctl is-enabled "$svc" 2>/dev/null)" || true
+        if [[ "$state" == "disabled" ]]; then
+            pass "$svc is disabled"
+        else
+            fail "$svc is disabled (got: $state)"
+        fi
+    done
+}
+
+test_systemd_start_stop_restart() {
+    section_header "Test: Systemd Start/Stop/Restart"
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping start/stop/restart tests"
+        return
+    fi
+
+    local server_service sentinel_service
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        server_service="valkey-server"
+        sentinel_service="valkey-sentinel"
+    else
+        server_service="valkey@default"
+        sentinel_service="valkey-sentinel@default"
+    fi
+
+    for svc in "$server_service" "$sentinel_service"; do
+        # Start
+        if systemctl start "$svc" 2>&1; then
+            pass "start $svc"
+        else
+            fail "start $svc"
+            journalctl -u "$svc" --no-pager -n 20 2>&1 || true
+            continue
+        fi
+
+        if wait_for_service "$svc" 15; then
+            pass "$svc is active after start"
+        else
+            fail "$svc is active after start (timed out)"
+            systemctl stop "$svc" 2>/dev/null || true
+            continue
+        fi
+
+        # Get PID before restart
+        local pid_before
+        pid_before="$(systemctl show "$svc" --property=MainPID --value 2>/dev/null)" || true
+
+        # Restart
+        if systemctl restart "$svc" 2>&1; then
+            pass "restart $svc"
+        else
+            fail "restart $svc"
+            journalctl -u "$svc" --no-pager -n 20 2>&1 || true
+            systemctl stop "$svc" 2>/dev/null || true
+            continue
+        fi
+
+        if wait_for_service "$svc" 15; then
+            pass "$svc is active after restart"
+        else
+            fail "$svc is active after restart (timed out)"
+            systemctl stop "$svc" 2>/dev/null || true
+            continue
+        fi
+
+        # Verify PID changed
+        local pid_after
+        pid_after="$(systemctl show "$svc" --property=MainPID --value 2>/dev/null)" || true
+        if [[ -n "$pid_after" ]] && [[ "$pid_after" != "0" ]] && [[ "$pid_after" != "$pid_before" ]]; then
+            pass "$svc PID changed after restart ($pid_before -> $pid_after)"
+        else
+            fail "$svc PID changed after restart (before=$pid_before after=$pid_after)"
+        fi
+
+        # Stop
+        if systemctl stop "$svc" 2>&1; then
+            pass "stop $svc"
+        else
+            fail "stop $svc"
+        fi
+        sleep 1
+
+        if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
+            pass "$svc is inactive after stop"
+        else
+            fail "$svc is inactive after stop (still active)"
+        fi
+
+        # Stop again — should be idempotent
+        if systemctl stop "$svc" 2>&1; then
+            pass "stop $svc (idempotent)"
+        else
+            fail "stop $svc (idempotent)"
+        fi
+    done
+}
+
+test_systemd_runtime_environment() {
+    section_header "Test: Systemd Runtime Environment"
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping runtime environment tests"
+        return
+    fi
+
+    local server_service pid_file
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        server_service="valkey-server"
+        pid_file="/run/valkey/valkey-server.pid"
+    else
+        server_service="valkey@default"
+        pid_file="/run/valkey/default.pid"
+    fi
+
+    echo "Starting $server_service..."
+    if ! systemctl start "$server_service" 2>&1; then
+        fail "start $server_service for runtime checks"
+        journalctl -u "$server_service" --no-pager -n 20 2>&1 || true
+        return
+    fi
+
+    if ! wait_for_service "$server_service" 15; then
+        fail "$server_service active for runtime checks (timed out)"
+        journalctl -u "$server_service" --no-pager -n 20 2>&1 || true
+        systemctl stop "$server_service" 2>/dev/null || true
+        return
+    fi
+
+    # Runtime directory
+    assert_dir_exists /run/valkey "/run/valkey"
+
+    # PID file
+    if [[ -f "$pid_file" ]]; then
+        pass "PID file exists: $pid_file"
+    else
+        fail "PID file exists: $pid_file"
+    fi
+
+    # Journal entries
+    local journal_output
+    journal_output="$(journalctl -u "$server_service" --no-pager -n 5 2>&1)" || true
+    if [[ -n "$journal_output" ]]; then
+        pass "journal has entries for $server_service"
+    else
+        fail "journal has entries for $server_service (empty output)"
+    fi
+
+    # Listening port
+    if command -v ss &>/dev/null; then
+        local ss_output
+        ss_output="$(ss -tlnp 2>/dev/null)" || true
+        if [[ "$ss_output" == *":6379 "* ]] || [[ "$ss_output" == *":6379"* ]]; then
+            pass "listening on port 6379"
+        else
+            fail "listening on port 6379 (not found in ss output)"
+        fi
+    else
+        skip "ss not available — skipping port check"
+    fi
+
+    echo "Stopping $server_service..."
+    systemctl stop "$server_service" 2>/dev/null || true
+    sleep 1
+}
+
+test_systemd_restart_on_failure() {
+    section_header "Test: Systemd Restart on Failure"
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping restart-on-failure tests"
+        return
+    fi
+
+    local server_service
+    if [[ "$OS_FAMILY" == "deb" ]]; then
+        server_service="valkey-server"
+    else
+        server_service="valkey@default"
+    fi
+
+    echo "Starting $server_service..."
+    if ! systemctl start "$server_service" 2>&1; then
+        fail "start $server_service for restart test"
+        journalctl -u "$server_service" --no-pager -n 20 2>&1 || true
+        return
+    fi
+
+    if ! wait_for_service "$server_service" 15; then
+        fail "$server_service active for restart test (timed out)"
+        systemctl stop "$server_service" 2>/dev/null || true
+        return
+    fi
+
+    # Get original PID
+    local old_pid
+    old_pid="$(systemctl show "$server_service" --property=MainPID --value 2>/dev/null)" || true
+    if [[ -z "$old_pid" ]] || [[ "$old_pid" == "0" ]]; then
+        fail "get MainPID for restart test (got: $old_pid)"
+        systemctl stop "$server_service" 2>/dev/null || true
+        return
+    fi
+    echo "Original PID: $old_pid"
+
+    # Kill with SEGV to trigger on-failure restart
+    echo "Sending SIGSEGV to PID $old_pid..."
+    kill -SEGV "$old_pid" 2>/dev/null || true
+
+    # Wait for service to restart
+    sleep 2
+    if wait_for_service "$server_service" 15; then
+        pass "$server_service restarted after SIGSEGV"
+    else
+        fail "$server_service restarted after SIGSEGV (did not become active)"
+        systemctl stop "$server_service" 2>/dev/null || true
+        return
+    fi
+
+    # Verify new PID differs
+    local new_pid
+    new_pid="$(systemctl show "$server_service" --property=MainPID --value 2>/dev/null)" || true
+    if [[ -n "$new_pid" ]] && [[ "$new_pid" != "0" ]] && [[ "$new_pid" != "$old_pid" ]]; then
+        pass "new PID ($new_pid) differs from old PID ($old_pid)"
+    else
+        fail "new PID ($new_pid) differs from old PID ($old_pid)"
+    fi
+
+    echo "Stopping $server_service..."
+    systemctl stop "$server_service" 2>/dev/null || true
+    sleep 1
+}
+
+test_systemd_targets() {
+    section_header "Test: Systemd Targets (RPM)"
+
+    if [[ "$OS_FAMILY" != "rpm" ]]; then
+        skip "not RPM — skipping target tests"
+        return
+    fi
+
+    if ! has_systemd; then
+        skip "systemd not available — skipping target tests"
+        return
+    fi
+
+    local target_output
+    target_output="$(systemctl list-unit-files valkey.target 2>/dev/null)" || true
+    if [[ "$target_output" == *"valkey.target"* ]]; then
+        pass "valkey.target is loaded"
+    else
+        fail "valkey.target is loaded (not found in unit files)"
+    fi
+
+    target_output="$(systemctl list-unit-files valkey-sentinel.target 2>/dev/null)" || true
+    if [[ "$target_output" == *"valkey-sentinel.target"* ]]; then
+        pass "valkey-sentinel.target is loaded"
+    else
+        fail "valkey-sentinel.target is loaded (not found in unit files)"
+    fi
+}
+
+test_systemd_tmpfiles_sysctl() {
+    section_header "Test: Systemd Tmpfiles & Sysctl (RPM)"
+
+    if [[ "$OS_FAMILY" != "rpm" ]]; then
+        skip "not RPM — skipping tmpfiles/sysctl tests"
+        return
+    fi
+
+    # Tmpfiles config
+    assert_file_exists /usr/lib/tmpfiles.d/valkey.conf "tmpfiles.d/valkey.conf"
+
+    # Sysctl config
+    if [[ -f /usr/lib/sysctl.d/00-valkey.conf ]]; then
+        pass "sysctl.d/00-valkey.conf exists"
+    elif [[ -f /etc/sysctl.d/00-valkey.conf ]]; then
+        pass "sysctl.d/00-valkey.conf exists (in /etc)"
+    else
+        fail "sysctl.d/00-valkey.conf exists (not found)"
+    fi
+
+    # Check sysctl values — these cannot be set inside containers (shared with host)
+    local somaxconn
+    somaxconn="$(sysctl -n net.core.somaxconn 2>/dev/null)" || true
+    if [[ -n "$somaxconn" ]] && [[ "$somaxconn" -ge 512 ]]; then
+        pass "net.core.somaxconn >= 512 (value: $somaxconn)"
+    elif [[ -n "$somaxconn" ]]; then
+        skip "net.core.somaxconn not applied (got: $somaxconn, likely container)"
+    else
+        skip "cannot read net.core.somaxconn"
+    fi
+
+    local overcommit
+    overcommit="$(sysctl -n vm.overcommit_memory 2>/dev/null)" || true
+    if [[ "$overcommit" == "1" ]]; then
+        pass "vm.overcommit_memory = 1"
+    elif [[ -n "$overcommit" ]]; then
+        skip "vm.overcommit_memory not applied (got: $overcommit, likely container)"
+    else
+        skip "cannot read vm.overcommit_memory"
     fi
 }
 
@@ -787,8 +1263,16 @@ main() {
     test_user_group
     test_directories
     test_config_files
+    test_systemd_unit_files
+    test_systemd_service_hardening
+    test_systemd_enable_disable
+    test_systemd_start_stop_restart
     test_valkey_server_service
     test_valkey_sentinel_service
+    test_systemd_runtime_environment
+    test_systemd_restart_on_failure
+    test_systemd_targets
+    test_systemd_tmpfiles_sysctl
     test_compat_redis
     test_dev_headers
     test_logrotate
