@@ -1,3 +1,0 @@
-[Unit]
-Description=Valkey target allowing to start/stop all valkey@.service instances at once
-

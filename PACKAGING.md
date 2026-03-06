@@ -10,11 +10,13 @@ Comprehensive documentation for the Valkey release automation and packaging infr
 - [RPM Packaging](#rpm-packaging)
 - [DEB Packaging](#deb-packaging)
 - [Version Management](#version-management)
+  - [Template System (8.x/9.x)](#template-system-8x9x)
 - [Cross-Version Upgrade Relationships](#cross-version-upgrade-relationships)
 - [Patch System](#patch-system)
 - [Documentation Handling](#documentation-handling)
 - [Platform Support Matrix](#platform-support-matrix)
 - [Build Validation](#build-validation)
+- [Scripts Reference](#scripts-reference)
 
 ---
 
@@ -39,8 +41,39 @@ valkey-release-automation/
 │       ├── update-valkey-doc.yml
 │       ├── update-valkey-website.yml
 │       └── update-try-valkey.yml
+├── scripts/
+│   ├── build-rpm.sh                         # RPM build script (runs in Docker)
+│   ├── build-deb.sh                         # DEB build script (runs in Docker)
+│   ├── generate-from-templates.sh           # Template processor (8.x/9.x+)
+│   ├── publish-repos.sh                     # Build + sign repos, deploy to GH Pages
+│   ├── setup-github-pages.sh                # One-time GPG + GH Pages setup
+│   ├── test_packages.sh                     # Package install/removal test suite
+│   ├── test_in_docker.sh                    # Run test_packages.sh in Docker locally
+│   ├── build-packages.sh                    # Legacy standalone build script
+│   ├── automate_alias_update.py             # Update valkey-hashes aliases
+│   ├── automate_website_description.py      # Update website descriptions
+│   ├── extract_hashes_info.py               # Extract hash info for releases
+│   └── pages/
+│       └── index.html                       # GH Pages template with install instructions
 └── packaging/
-    ├── 7.x/                                 # Valkey 7.2.x packaging
+    ├── common/                              # Shared files across all versions
+    │   ├── rpm/                             # Shared RPM sources
+    │   └── debian/                          # Shared DEB files
+    │       ├── valkey-doc.install
+    │       ├── valkey-doc.manpages
+    │       ├── valkey-sentinel.manpages
+    │       ├── valkey-server.manpages
+    │       ├── valkey-tools.manpages
+    │       └── ...
+    ├── templates/                           # Templates for 8.x/9.x+ (see below)
+    │   ├── debian/
+    │   │   ├── control.template             # @@MAJOR_VERSION@@ placeholder
+    │   │   └── rules.template               # @@DOC_VERSION@@ placeholder
+    │   └── rpm/
+    │       ├── valkey.spec.template          # Multiple placeholders
+    │       ├── changelog-8.x                # RPM changelog for 8.x
+    │       └── changelog-9.x                # RPM changelog for 9.x
+    ├── 7.x/                                 # Valkey 7.2.x packaging (no templates)
     │   ├── rpm/
     │   │   ├── valkey.spec
     │   │   └── valkey-conf.patch
@@ -48,46 +81,53 @@ valkey-release-automation/
     │       ├── control, rules, changelog
     │       ├── patches/
     │       └── ...
-    ├── 8.x/                                 # Valkey 8.x packaging
+    ├── 8.x/                                 # Valkey 8.x overrides only
     │   ├── rpm/
+    │   │   └── valkey-conf.patch            # (spec generated from template)
     │   └── debian/
-    └── 9.x/                                 # Valkey 9.x packaging
+    │       ├── changelog                    # (control/rules generated from template)
+    │       └── patches/
+    └── 9.x/                                 # Valkey 9.x overrides only
         ├── rpm/
+        │   └── valkey-conf.patch            # (spec generated from template)
         └── debian/
+            ├── changelog                    # (control/rules generated from template)
+            └── patches/
 ```
 
 ### High-Level Flow
 
 ```
-                    ┌──────────────────────────┐
-                    │   GitHub Event Trigger    │
-                    │  (dispatch / manual /     │
-                    │   repository_dispatch)    │
-                    └────────────┬─────────────┘
-                                 │
-                                 ▼
-                    ┌──────────────────────────┐
-                    │    build-release.yml      │
-                    │  (Master Orchestrator)    │
-                    └────────────┬─────────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              │                  │                   │
-              ▼                  ▼                   ▼
-     ┌─────────────┐   ┌──────────────┐   ┌──────────────────┐
-     │  Tarball     │   │ packages.yml │   │  Post-Release    │
-     │  Builds      │   │ (RPM + DEB)  │   │  (prod only)     │
-     │  (x86+ARM)   │   │              │   │                  │
-     └─────────────┘   └──────┬───────┘   │ - update hashes  │
-                               │           │ - update docs     │
-                    ┌──────────┴────────┐  │ - update website  │
-                    │                   │  │ - update container│
-                    ▼                   ▼  │ - try-valkey      │
-             ┌───────────┐     ┌──────────┐│ - trigger bundle │
-             │ RPM Builds│     │DEB Builds ││   (>= 8.1.0)    │
-             │ (20 plat× │     │(5 plat×  ││                  │
-             │  2 arch)  │     │ 2 arch)  │└──────────────────┘
-             └───────────┘     └──────────┘
+    ┌──────────────────────────┐          ┌──────────────────────────┐
+    │   GitHub Event Trigger    │          │   Manual / workflow_call  │
+    │  (dispatch / manual /     │          │                          │
+    │   repository_dispatch)    │          │                          │
+    └────────────┬─────────────┘          └────────────┬─────────────┘
+                 │                                      │
+                 ▼                                      ▼
+    ┌──────────────────────────┐          ┌──────────────────────────┐
+    │    build-release.yml      │          │      packages.yml         │
+    │  (Master Orchestrator)    │          │  (RPM + DEB Packages)     │
+    └────────────┬─────────────┘          └────────────┬─────────────┘
+                 │                                      │
+      ┌──────────┼──────────┐               ┌──────────┴────────┐
+      │          │          │               │                   │
+      ▼          ▼          ▼               ▼                   ▼
+  ┌────────┐ ┌────────┐ ┌───────────┐  ┌───────────┐     ┌──────────┐
+  │Tarball │ │Post-   │ │ trigger   │  │ RPM Builds│     │DEB Builds│
+  │Builds  │ │Release │ │ bundle    │  │ (15 plat× │     │(5 plat×  │
+  │(x86+   │ │(prod)  │ │(>= 8.1.0)│  │  2 arch)  │     │ 2 arch)  │
+  │ ARM)   │ │        │ │           │  └─────┬─────┘     └────┬─────┘
+  └────────┘ │- hashes│ └───────────┘        │                │
+             │- docs  │                      ▼                ▼
+             │- site  │                ┌──────────┐     ┌──────────┐
+             │- cont. │                │ Test RPM │     │ Test DEB │
+             └────────┘                └──────────┘     └──────────┘
+                                             │                │
+                                             ▼                ▼
+                                       ┌──────────────────────────┐
+                                       │  publish-repos → GH Pages│
+                                       └──────────────────────────┘
 ```
 
 ---
@@ -122,10 +162,41 @@ process-inputs ──► validate version, detect bundle eligibility (>= 8.1.0)
        │           │
        │           └──► update-valkey-doc (only for X.Y.0 releases)
        │
-       ├──► generate-build-matrix ──► release-build-linux-x86-packages
-       │                          └──► release-build-linux-arm-packages
+       ├──► generate-build-matrix ──► release-build-linux-x86-packages  (tarballs → S3)
+       │                          └──► release-build-linux-arm-packages  (tarballs → S3)
        │
        └──► trigger-valkey-bundle (>= 8.1.0 only)
+```
+
+### packages.yml (RPM + DEB Builds)
+
+`packages.yml` is a **separate workflow** that builds RPM and DEB distribution packages. It runs independently from `build-release.yml` and can be triggered via:
+- `workflow_call` — invoked by other workflows
+- `workflow_dispatch` — manual trigger with a `version` input
+
+```
+packages.yml
+       │
+       ├──► process-inputs ──► derive packaging_dir (e.g., 9.x)
+       │
+       ├──► build-rpm (15 platforms × 2 arches)
+       │       ├── merge common/ + N.x/ packaging
+       │       ├── generate spec from template (8.x/9.x)
+       │       ├── build RPMs in Docker
+       │       └── upload artifacts
+       │
+       ├──► build-deb (5 platforms × 2 arches)
+       │       ├── merge common/ + N.x/ packaging
+       │       ├── generate control/rules from template (8.x/9.x)
+       │       ├── build DEBs in Docker
+       │       └── upload artifacts
+       │
+       ├──► test-rpm ──► install + systemd test on each platform
+       ├──► test-deb ──► install + systemd test on each platform
+       │
+       ├──► publish-repos ──► sign packages + create APT/YUM repos → deploy to GitHub Pages
+       │
+       └──► build-summary ──► aggregate results
 ```
 
 ---
@@ -142,15 +213,22 @@ The primary workflow for building distribution packages. Accepts a single `versi
 
 ### Process Inputs Job
 
-Derives the packaging directory from the version's major number:
+Derives the packaging directory from the version's **major** number. All minor/patch versions within the same major share a single packaging directory:
 
 ```
-Input version    Packaging dir
-─────────────    ─────────────
-7.2.12       →   packaging/7.x/
-8.1.6        →   packaging/8.x/
-9.0.3        →   packaging/9.x/
+Input version    Packaging dir     Doc version    Notes
+─────────────    ──────────────    ───────────    ─────
+7.2.12       →   packaging/7.x/    7.2.0          No templates (files maintained directly)
+8.0.2        →   packaging/8.x/    8.0.0          Templates with hiredis bundled dep
+8.1.6        →   packaging/8.x/    8.1.0          Templates with hiredis bundled dep
+9.0.3        →   packaging/9.x/    9.0.0          Templates with libvalkey bundled dep
+9.1.0        →   packaging/9.x/    9.1.0          Templates with libvalkey bundled dep
+10.0.1       →   packaging/10.x/   10.0.0         Templates with libvalkey bundled dep (*)
 ```
+
+All minor/patch versions within the same major share a single packaging directory. The minor version only affects `DOC_VERSION` (derived as `MAJOR.MINOR.0`). For example, `8.0.x` and `8.1.x` both use `packaging/8.x/`; `9.0.x` and `9.1.x` both use `packaging/9.x/`.
+
+> (*) **10.x requires setup:** create `packaging/10.x/` with version-specific files and `packaging/templates/rpm/changelog-10.x`. See [Adding a new major version](#template-system-8x9x) for details.
 
 ```yaml
 MAJOR="${VERSION%%.*}"
@@ -179,12 +257,13 @@ packaging_dir="${MAJOR}.x"
 │    │  ┌─────┴──────────────────────────────────────┐              │
 │    │  │  For each (platform × arch):               │              │
 │    │  │  1. Launch Docker container                │              │
-│    │  │  2. Copy packaging files from X.x/         │              │
-│    │  │  3. Override version via sed               │              │
-│    │  │  4. Download source tarball                │              │
-│    │  │  5. Build (rpmbuild / dpkg-buildpackage)   │              │
-│    │  │  6. Validate output packages               │              │
-│    │  │  7. Upload artifacts                       │              │
+│    │  │  2. Merge common/ + X.x/ packaging files   │              │
+│    │  │  3. Generate files from templates (8.x/9.x)│              │
+│    │  │  4. Override version via sed               │              │
+│    │  │  5. Download source tarball                │              │
+│    │  │  6. Build (rpmbuild / dpkg-buildpackage)   │              │
+│    │  │  7. Validate output packages               │              │
+│    │  │  8. Upload artifacts                       │              │
 │    │  └────────────────────────────────────────────┘              │
 │    │                                                              │
 │    ▼                                                              │
@@ -200,27 +279,45 @@ packaging_dir="${MAJOR}.x"
 
 ### Spec File Structure
 
-Each version branch has its own spec file at `packaging/X.x/rpm/valkey.spec`.
+For **7.x**, the spec file lives at `packaging/7.x/rpm/valkey.spec` (maintained manually).
+
+For **8.x and 9.x**, the spec file is **generated from a template** at build time by `scripts/generate-from-templates.sh` using `packaging/templates/rpm/valkey.spec.template`. This avoids maintaining near-identical spec files across major versions.
 
 ```
-valkey.spec structure:
+valkey.spec.template structure:
 ├── Conditionals         (%is_suse, %is_rhel, %is_amazon)
 ├── Macros               (build_flags, install_flags, doc_version)
 ├── Package metadata     (Name, Version, Release, License, Sources)
+│   └── @@BUNDLED_DEP_NAME@@, @@BUNDLED_DEP_PROVIDES@@  (hiredis vs libvalkey)
 ├── Build requirements   (per-platform conditional)
 ├── Main package         (valkey)
-├── Subpackages
+│   └── Obsoletes: valkey < @@MAJOR_VERSION@@.0
+├── Subpackages          (each with Obsoletes: < @@MAJOR_VERSION@@.0)
 │   ├── valkey-devel
 │   ├── valkey-compat-redis
 │   ├── valkey-compat-redis-devel
 │   └── valkey-doc (conditional)
 ├── %prep                (source extraction, patches, license moves)
+│   └── deps/@@BUNDLED_DEP_DIR@@/COPYING → COPYING-@@BUNDLED_DEP_NAME@@-BSD-3-Clause
 ├── %build               (make with build_flags)
 ├── %install             (binaries, configs, systemd units, symlinks)
 ├── %pre / %post         (user creation, systemd integration)
 ├── %files               (per-package file lists)
-└── %changelog
+└── %changelog           (@@CHANGELOG@@ → from changelog-N.x file)
 ```
+
+**Template placeholders:**
+
+| Placeholder | 8.x Value | 9.x / 10.x Value |
+|-------------|-----------|-------------------|
+| `@@MAJOR_VERSION@@` | `8` | `9` / `10` |
+| `@@SPEC_VERSION@@` | `8.1.6` (from input) | `9.0.3` / `10.0.1` (from input) |
+| `@@BUNDLED_DEP_NAME@@` | `hiredis` | `libvalkey` |
+| `@@BUNDLED_DEP_PROVIDES@@` | `Provides: bundled(hiredis)` | `Provides: bundled(libvalkey) = 1.0.0` |
+| `@@BUNDLED_DEP_DIR@@` | `hiredis` | `libvalkey` |
+| `@@CHANGELOG@@` | Contents of `changelog-8.x` | Contents of `changelog-9.x` / `changelog-10.x` |
+
+> **Note:** The bundled dependency switches from `hiredis` to `libvalkey` at major version 9. All versions >= 9 (including future 10.x, 11.x, etc.) use `libvalkey` unless the logic in `generate-from-templates.sh` is updated.
 
 ### RPM Build Process
 
@@ -234,27 +331,37 @@ valkey.spec structure:
 │                                                          │
 │  2. Install build tools (rpm-build, gcc, make, etc.)     │
 │                                                          │
-│  3. Copy spec + supporting files to ~/rpmbuild/SPECS/    │
+│  3. Merge common/ + X.x/ packaging files into /packaging │
 │                                                          │
-│  4. ┌─ Override version fields via sed ──────────────┐   │
+│  4. ┌─ Generate spec from template (8.x/9.x) ───────┐   │
+│     │ generate-from-templates.sh --type rpm            │   │
+│     │   Substitutes: @@MAJOR_VERSION@@,                │   │
+│     │   @@BUNDLED_DEP_NAME/PROVIDES/DIR@@,             │   │
+│     │   @@CHANGELOG@@ from changelog-N.x              │   │
+│     │ (7.x: uses spec directly, no template)           │   │
+│     └────────────────────────────────────────────────┘   │
+│                                                          │
+│  5. Copy spec + supporting files to ~/rpmbuild/SPECS/    │
+│                                                          │
+│  6. ┌─ Override version fields via sed ──────────────┐   │
 │     │ sed "s/^Version:.*/Version: 9.0.3/"            │   │
 │     │ sed "s/^%global doc_version.*/%global doc_      │   │
 │     │      version 9.0.0/"                           │   │
 │     └────────────────────────────────────────────────┘   │
 │                                                          │
-│  5. Download source tarball to ~/rpmbuild/SOURCES/       │
+│  7. Download source tarball to ~/rpmbuild/SOURCES/       │
 │     valkey-9.0.3.tar.gz                                  │
 │     valkey-doc-9.0.0.tar.gz (if docs enabled)            │
 │                                                          │
-│  6. rpmbuild -ba valkey.spec [--without docs]            │
+│  8. rpmbuild -ba valkey.spec [--without docs]            │
 │     ├── %prep: extract, apply valkey-conf.patch          │
 │     ├── %build: make with BUILD_TLS, SYSTEMD, JEMALLOC  │
 │     ├── %install: install binaries, configs, symlinks    │
 │     └── Package: create RPMs in ~/rpmbuild/RPMS/         │
 │                                                          │
-│  7. Validate output (query, files, arch, size > 500KB)   │
+│  9. Validate output (query, files, arch, size > 500KB)   │
 │                                                          │
-│  8. Upload RPMs as GitHub Actions artifacts               │
+│ 10. Upload RPMs as GitHub Actions artifacts               │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -348,41 +455,45 @@ The spec file adapts to different platforms using RPM conditionals:
 
 ### Debian Directory Structure
 
+For **8.x/9.x**, `control` and `rules` are **generated from templates** at build time. The version-specific directories only contain files that truly differ per version (changelog, patches, conf patch). Files identical across 8.x/9.x (manpages, install lists) live in `packaging/common/debian/`.
+
 ```
-packaging/X.x/debian/
-├── control                      # Source + binary package definitions
-├── rules                        # Build rules (Makefile)
-├── changelog                    # Package changelog
-├── compat                       # Debhelper compat level
-├── copyright                    # License information
-├── source/
-│   └── format                   # Source format (3.0 quilt)
-├── patches/
-│   ├── series                   # Patch application order
+packaging/common/debian/         # Shared across all versions
+├── valkey-doc.install
+├── valkey-doc.manpages
+├── valkey-sentinel.manpages
+├── valkey-server.manpages
+├── valkey-tools.manpages
+├── bin/
+│   └── generate-systemd-service-files
+├── ...                          # Other shared files
+
+packaging/templates/debian/      # Templates for 8.x/9.x+
+├── control.template             # @@MAJOR_VERSION@@ → Replaces/Breaks
+└── rules.template               # @@DOC_VERSION@@ → VALKEY_DOC_VERSION
+
+packaging/X.x/debian/            # Version-specific overrides only
+├── changelog                    # Package changelog (version-specific)
+├── patches/                     # Patches (differ per version)
+│   ├── series
 │   ├── debian-packaging/
 │   │   └── 0001-Set-Debian-configuration-defaults.patch
 │   ├── 0001-Fix-FTBFS-on-kFreeBSD.patch
 │   ├── 0002-Add-CPPFLAGS-to-upstream-makefiles.patch
 │   ├── 0003-Use-get_current_dir_name-over-PATHMAX.patch
 │   └── 0004-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch
-├── bin/
-│   └── generate-systemd-service-files
-├── tests/
-│   └── control                  # Autopkgtest definitions
-├── upstream/
-│   └── metadata
-├── valkey-server.install        # File lists per package
-├── valkey-server.dirs
-├── valkey-sentinel.install
-├── valkey-tools.install
-├── valkey-dev.install
-├── valkey-compat-redis.install
-├── valkey-compat-redis-dev.install
-├── valkey-doc.install           # (not in 7.x — no docs available)
-├── valkey-server.manpages       # (not in 7.x)
-├── valkey-tools.manpages        # (not in 7.x)
-└── valkey-sentinel.manpages     # (not in 7.x)
+└── valkey-conf.patch            # (if present)
+
+Note: 7.x retains the traditional layout with control, rules, and all
+files directly in packaging/7.x/debian/ (no templates used).
 ```
+
+**Template placeholders (DEB):**
+
+| Placeholder | Example 8.x | Example 9.x |
+|-------------|-------------|-------------|
+| `@@MAJOR_VERSION@@` (control) | `8` → `Breaks: valkey-server (<< 8.0~)` | `9` → `Breaks: valkey-server (<< 9.0~)` |
+| `@@DOC_VERSION@@` (rules) | `8.1.0` | `9.0.0` |
 
 ### DEB Build Process
 
@@ -394,22 +505,31 @@ packaging/X.x/debian/
 │  1. Launch platform Docker container                     │
 │     (e.g., debian:bookworm, ubuntu:noble)                │
 │                                                          │
-│  2. Extract source tarball, copy debian/ directory into   │
+│  2. Merge common/ + X.x/ packaging files into /packaging │
+│                                                          │
+│  3. ┌─ Generate control/rules from template (8.x/9.x)─┐ │
+│     │ generate-from-templates.sh --type deb             │ │
+│     │   control: @@MAJOR_VERSION@@ → 9                  │ │
+│     │   rules:   @@DOC_VERSION@@ → 9.0.0               │ │
+│     │ (7.x: uses files directly, no template)           │ │
+│     └────────────────────────────────────────────────┘   │
+│                                                          │
+│  4. Extract source tarball, copy debian/ directory into   │
 │     source tree                                          │
 │                                                          │
-│  3. ┌─ Override doc version via sed ─────────────────┐   │
+│  5. ┌─ Override doc version via sed ─────────────────┐   │
 │     │ sed "s/^VALKEY_DOC_VERSION = .*/VALKEY_DOC_     │   │
 │     │      VERSION = 9.0.0/" debian/rules            │   │
 │     └────────────────────────────────────────────────┘   │
 │                                                          │
-│  4. Update debian/changelog:                             │
+│  6. Update debian/changelog:                             │
 │     dch -v "9.0.3-1.bookworm" -D bookworm               │
 │     "Automated build for bookworm"                       │
 │                                                          │
-│  5. Install build dependencies:                          │
+│  7. Install build dependencies:                          │
 │     mk-build-deps --install debian/control               │
 │                                                          │
-│  6. dpkg-buildpackage -b -us -uc -a${ARCH}              │
+│  8. dpkg-buildpackage -b -us -uc -a${ARCH}              │
 │     ├── Apply patches (series file, --fuzz=0)            │
 │     ├── dh_auto_build (make with flags)                  │
 │     ├── Download + build valkey-doc (if available)       │
@@ -417,9 +537,9 @@ packaging/X.x/debian/
 │     ├── Generate systemd service files                   │
 │     └── Package .deb files                               │
 │                                                          │
-│  7. Validate output (architecture, metadata)             │
+│  9. Validate output (architecture, metadata)             │
 │                                                          │
-│  8. Upload .deb, .ddeb, .buildinfo, .changes as          │
+│ 10. Upload .deb, .ddeb, .buildinfo, .changes as          │
 │     GitHub Actions artifacts                             │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -480,7 +600,11 @@ The `debian/rules` file overrides several `dh_*` targets:
 
 ### Version Override at Build Time
 
-Neither RPM specs nor DEB packaging files need manual version updates. The workflow overrides versions dynamically using `sed` at build time:
+Version management uses a two-layer approach:
+
+1. **Template generation** (8.x/9.x): `generate-from-templates.sh` creates version-specific `control`, `rules`, and `valkey.spec` from templates, substituting major-version-dependent values (Obsoletes thresholds, bundled dependency names, changelogs).
+
+2. **Sed overrides** (all versions): Build scripts dynamically set the exact patch version via `sed` at build time.
 
 ```
 Input: version = 9.0.3
@@ -496,12 +620,20 @@ Input: version = 9.0.3
            │   RPM Build  │          │   DEB Build  │
            └──────┬───────┘          └──────┬───────┘
                   │                         │
-    sed on valkey.spec:              sed on debian/rules:
-    Version: 9.0.3                   VALKEY_DOC_VERSION = 9.0.0
-    %global doc_version 9.0.0
-                                     dch -v "9.0.3-1.bookworm"
-                                     (updates debian/changelog)
+  1. Template:                     1. Template:
+     spec.template → valkey.spec      control.template → control
+     @@MAJOR_VERSION@@ = 9            @@MAJOR_VERSION@@ = 9
+     @@BUNDLED_DEP_*@@ = libvalkey    rules.template → rules
+     @@CHANGELOG@@ = changelog-9.x   @@DOC_VERSION@@ = 9.0.0
+                  │                         │
+  2. sed on valkey.spec:           2. sed on debian/rules:
+     Version: 9.0.3                   VALKEY_DOC_VERSION = 9.0.0
+     %global doc_version 9.0.0
+                                      dch -v "9.0.3-1.bookworm"
+                                      (updates debian/changelog)
 ```
+
+> **Note:** For 7.x, templates are not used; the spec/control/rules files are maintained directly in `packaging/7.x/`.
 
 ### Doc Version Derivation
 
@@ -510,8 +642,11 @@ The doc version zeroes out the patch component:
 ```
 version      → doc_version
 ─────────      ───────────
+10.0.1       → 10.0.0
+9.1.0        → 9.1.0
 9.0.3        → 9.0.0
 8.1.6        → 8.1.0
+8.0.2        → 8.0.0
 7.2.12       → 7.2.0
 ```
 
@@ -523,10 +658,47 @@ DOC_VERSION=$(echo "${VERSION}" | sed "s/\.[0-9]*$/.0/")
 ### Packaging Directory Selection
 
 ```
+version=10.0.1 →  MAJOR=10 →  packaging/10.x/  (requires setup — see below)
+version=9.1.0  →  MAJOR=9  →  packaging/9.x/   (same dir as 9.0.x)
 version=9.0.3  →  MAJOR=9  →  packaging/9.x/
 version=8.1.6  →  MAJOR=8  →  packaging/8.x/
+version=8.0.2  →  MAJOR=8  →  packaging/8.x/   (same dir as 8.1.x)
 version=7.2.12 →  MAJOR=7  →  packaging/7.x/
 ```
+
+### Template System (8.x/9.x)
+
+The `packaging/templates/` directory contains parameterized versions of files that differ only in version-dependent values between 8.x and 9.x. This eliminates near-duplicate maintenance.
+
+**When to update templates vs version-specific files:**
+
+| Change needed | Where to edit |
+|---------------|---------------|
+| New Obsoletes threshold, Replaces/Breaks version | `templates/debian/control.template` or `templates/rpm/valkey.spec.template` |
+| New RPM changelog entry | `templates/rpm/changelog-N.x` |
+| New patch for a specific version | `packaging/N.x/rpm/valkey-conf.patch` or `packaging/N.x/debian/patches/` |
+| New DEB changelog entry | `packaging/N.x/debian/changelog` |
+| Change to bundled dep logic | `scripts/generate-from-templates.sh` |
+
+**Adding a new major version (e.g., 10.x):**
+
+1. Create `packaging/10.x/rpm/` with:
+   - `valkey-conf.patch` — regenerated against the new source tree
+2. Create `packaging/10.x/debian/` with:
+   - `changelog` — initial DEB changelog entry
+   - `patches/` — regenerated DEB patches against the new source tree
+3. Create `packaging/templates/rpm/changelog-10.x` with the initial RPM changelog entry
+4. If the bundled dependency changes (e.g., libvalkey → something new), update the logic in `generate-from-templates.sh`
+5. The template system handles `control`, `rules`, and `valkey.spec` automatically — no need to create these files
+
+**Adding a new minor version (e.g., 9.1.x):** No action needed. The `9.1.x` version uses the existing `packaging/9.x/` directory and templates. Only `DOC_VERSION` changes (to `9.1.0`), which is derived automatically from the version input.
+
+**The generate script** (`scripts/generate-from-templates.sh`) accepts:
+```
+--type rpm|deb --version <VALKEY_VERSION> --templates-dir <path> --output-dir <path>
+```
+
+It derives `MAJOR_VERSION` and `DOC_VERSION` from the version string, selects the appropriate bundled dependency (hiredis for <9, libvalkey for >=9), and performs sed substitutions.
 
 ---
 
@@ -537,16 +709,16 @@ Packages declare upgrade relationships so newer major versions cleanly replace o
 ### Upgrade Path Diagram
 
 ```
-    ┌───────────┐      ┌───────────┐      ┌───────────┐
-    │  Valkey    │      │  Valkey    │      │  Valkey    │
-    │  7.x      │─────►│  8.x      │─────►│  9.x      │
-    │           │      │           │      │           │
-    │ (base)    │      │ Obsoletes │      │ Obsoletes │
-    │           │      │ valkey<8.0│      │ valkey<9.0│
-    └───────────┘      └───────────┘      └───────────┘
-         │                                      ▲
-         └──────────────────────────────────────┘
-                   (also upgrades directly)
+    ┌───────────┐      ┌───────────┐      ┌───────────┐      ┌───────────┐
+    │  Valkey    │      │  Valkey    │      │  Valkey    │      │  Valkey    │
+    │  7.x      │─────►│  8.x      │─────►│  9.x      │─────►│  10.x     │
+    │           │      │           │      │           │      │           │
+    │ (base)    │      │ Obsoletes │      │ Obsoletes │      │ Obsoletes │
+    │           │      │ valkey<8.0│      │ valkey<9.0│      │valkey<10.0│
+    └───────────┘      └───────────┘      └───────────┘      └───────────┘
+         │                                                         ▲
+         └─────────────────────────────────────────────────────────┘
+                          (also upgrades directly)
 ```
 
 ### RPM Relationships
@@ -558,6 +730,7 @@ Uses `Obsoletes:` to indicate that this package supersedes older versions:
 | 7.x | *(none)* | Base version, no predecessors |
 | 8.x | `Obsoletes: valkey < 8.0` | Replaces 7.x on upgrade |
 | 9.x | `Obsoletes: valkey < 9.0` | Replaces 7.x and 8.x on upgrade |
+| 10.x | `Obsoletes: valkey < 10.0` | Replaces 7.x, 8.x, and 9.x on upgrade |
 
 Applied to all subpackages: `valkey`, `valkey-devel`, `valkey-compat-redis`, `valkey-compat-redis-devel`, `valkey-doc`.
 
@@ -572,6 +745,8 @@ Uses `Replaces:` + `Breaks:` pair (the Debian standard for upgrade replacement):
 |     | `Breaks: valkey-server (<< 8.0~)` | Forces removal of 7.x |
 | 9.x | `Replaces: valkey-server (<< 9.0~)` | Can overwrite 7.x/8.x files |
 |     | `Breaks: valkey-server (<< 9.0~)` | Forces removal of 7.x/8.x |
+| 10.x | `Replaces: valkey-server (<< 10.0~)` | Can overwrite 7.x/8.x/9.x files |
+|      | `Breaks: valkey-server (<< 10.0~)` | Forces removal of 7.x/8.x/9.x |
 
 Applied to all binary packages: `valkey-server`, `valkey-sentinel`, `valkey-tools`, `valkey-dev`, `valkey-compat-redis`, `valkey-compat-redis-dev`, `valkey-doc`.
 
@@ -655,6 +830,7 @@ Patches differ across version branches because the source code differs:
 │ CC variable      │ REDIS_CC       │ SERVER_CC      │ SERVER_CC -I.  │
 │ LD variable      │ REDIS_LD       │ SERVER_LD      │ SERVER_LD      │
 │ Bundled lib      │ hiredis        │ hiredis        │ libvalkey      │
+│                  │                │ (via template) │ (via template) │
 │ dir ./ line      │ 507            │ ~631           │ ~706           │
 │ debug.c params   │ (eip, uplevel) │ (eip, uplevel, │ (eip, uplevel, │
 │                  │                │  process_id)   │  process_id)   │
@@ -730,10 +906,10 @@ Default (no profile)   →  attempts download; 7.x handles failure gracefully
 ### Total Build Matrix
 
 ```
-RPM:  16 platforms × 2 architectures = 32 builds
+RPM:  15 platforms × 2 architectures = 30 builds
 DEB:   5 platforms × 2 architectures = 10 builds
                                        ─────────
-                              Total:   42 builds per version
+                              Total:   40 builds per version
 ```
 
 ---
@@ -756,6 +932,302 @@ After each DEB build, the workflow performs:
 1. **Package discovery** — finds `valkey-server_${VERSION}*.deb` in output
 2. **Architecture field** — `dpkg-deb --field Architecture` matches expected arch
 3. **Metadata dump** — `dpkg-deb --info` for inspection
+
+---
+
+## Scripts Reference
+
+All scripts live in the `scripts/` directory. The core build and publishing scripts are described below.
+
+### build-rpm.sh
+
+**Purpose:** Builds RPM packages inside a Docker container for a single platform/architecture combination.
+
+**Invoked by:** `packages.yml` → Docker container (`bash /scripts/build-rpm.sh`)
+
+**Environment variables (required):**
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `VALKEY_VERSION` | `9.0.3` | Version to build |
+| `PLATFORM_FAMILY` | `suse` or `rhel` | Determines package manager and build flags |
+| `PLATFORM_ID` | `rocky9`, `fedora41` | Identifies the specific distro |
+| `EPEL_PACKAGE` | `epel-release` or `none` | EPEL package to install (RHEL-based only) |
+| `EXPECTED_ARCH` | `x86_64` | Architecture for validation |
+
+**Docker volume mounts:**
+
+| Mount | Container path | Description |
+|-------|---------------|-------------|
+| `scripts/` | `/scripts:ro` | Build scripts |
+| `packaging/common/rpm/` | `/packaging-common:ro` | Shared RPM sources |
+| `packaging/N.x/rpm/` | `/packaging-override:ro` | Version-specific overrides |
+| `packaging/templates/rpm/` | `/packaging-templates:ro` | Templates (8.x/9.x+) |
+| `output/` | `/output` | Built RPMs written here |
+
+**Execution flow:**
+
+```
+1. Install build tools (rpm-build, gcc, make, jemalloc-devel, openssl-devel, etc.)
+   └── SUSE: zypper    RHEL/Fedora: dnf/yum
+2. Merge packaging layers: common/ → override/ → templates
+3. Generate spec from template (8.x/9.x, via generate-from-templates.sh)
+4. Copy spec + source files to ~/rpmbuild/{SPECS,SOURCES}/
+5. Override Version: and %global doc_version via sed
+6. Download valkey-${VERSION}.tar.gz and valkey-doc-${DOC_VERSION}.tar.gz
+7. rpmbuild -ba valkey.spec [--without docs if pandoc unavailable]
+8. Copy RPMs to /output/
+9. Sanity checks: rpm query, required binaries, architecture, size > 500KB
+```
+
+---
+
+### build-deb.sh
+
+**Purpose:** Builds DEB packages inside a Docker container for a single platform/architecture combination.
+
+**Invoked by:** `packages.yml` → Docker container (`bash /scripts/build-deb.sh`)
+
+**Environment variables (required):**
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `VALKEY_VERSION` | `9.0.3` | Version to build |
+| `PLATFORM_ID` | `debian12`, `ubuntu2404` | Distro identifier |
+| `PLATFORM_CODENAME` | `bookworm`, `noble` | Used in changelog and Release file |
+| `EXPECTED_ARCH` | `amd64` | Architecture for validation |
+
+**Docker volume mounts:**
+
+| Mount | Container path | Description |
+|-------|---------------|-------------|
+| `scripts/` | `/scripts:ro` | Build scripts |
+| `packaging/common/debian/` | `/packaging-common:ro` | Shared DEB files |
+| `packaging/N.x/debian/` | `/packaging-override:ro` | Version-specific overrides |
+| `packaging/templates/debian/` | `/packaging-templates:ro` | Templates (8.x/9.x+) |
+| `output/` | `/output` | Built DEBs written here |
+
+**Execution flow:**
+
+```
+1. Install build tools (build-essential, debhelper, devscripts, libssl-dev, etc.)
+2. Merge packaging layers: common/ → override/ → templates
+3. Generate control/rules from template (8.x/9.x, via generate-from-templates.sh)
+4. Download and extract valkey source tarball
+5. Copy debian/ directory into source tree
+6. Override VALKEY_DOC_VERSION via sed
+7. Fix debhelper compat conflicts (remove debian/compat if debhelper-compat used)
+8. Fix jemalloc on Ubuntu 22.04 (Jammy) if headers missing
+9. Install build-deps with mk-build-deps
+10. Update changelog: dch -v "${VERSION}-1.${CODENAME}" -D ${CODENAME}
+11. dpkg-buildpackage -b -us -uc -a${ARCH}
+12. Copy .deb, .ddeb, .buildinfo, .changes to /output/
+13. Sanity checks: package discovery, architecture match
+```
+
+---
+
+### generate-from-templates.sh
+
+**Purpose:** Generates version-specific packaging files (`control`, `rules`, `valkey.spec`) from parameterized templates. Replaces `@@PLACEHOLDER@@` variables with values derived from the version string.
+
+**Invoked by:** `build-rpm.sh` and `build-deb.sh` (inside Docker containers)
+
+**Usage:**
+```bash
+generate-from-templates.sh --type rpm|deb --version <VERSION> \
+  --templates-dir <path> --output-dir <path>
+```
+
+**Version derivation:**
+```
+Input: 9.0.3
+  MAJOR_VERSION = 9
+  MINOR = 0
+  DOC_VERSION = 9.0.0
+```
+
+**Behavior by version:**
+
+| Major version | Action |
+|---------------|--------|
+| < 8 (7.x) | Skips entirely — 7.x uses files directly |
+| >= 8, < 9 | Generates with `hiredis` as bundled dep |
+| >= 9 | Generates with `libvalkey` as bundled dep |
+
+**DEB processing:** Substitutes `@@MAJOR_VERSION@@` in `control.template` and `@@DOC_VERSION@@` in `rules.template`.
+
+**RPM processing:** Substitutes all placeholders in `valkey.spec.template`, then uses `awk` to replace `@@CHANGELOG@@` with the contents of `changelog-N.x` (multi-line replacement).
+
+---
+
+### publish-repos.sh
+
+**Purpose:** Builds APT and YUM package repositories from build artifacts, signs packages and repository metadata with GPG, and generates the GitHub Pages site.
+
+**Invoked by:** `packages.yml` → `publish-repos` job (runs on `ubuntu-latest`, not in Docker)
+
+**Usage:**
+```bash
+publish-repos.sh <version> <gpg_fingerprint> <pages_url> <artifacts_dir> <site_dir> <template_dir>
+```
+
+**Arguments:**
+
+| Argument | Example | Description |
+|----------|---------|-------------|
+| `version` | `9.0.3` | Valkey version (determines repo name `valkey-9`) |
+| `gpg_fingerprint` | `ABC123...` | GPG key fingerprint for signing |
+| `pages_url` | `https://owner.github.io/repo` | Base URL for the Pages site |
+| `artifacts_dir` | `artifacts` | Directory with downloaded build artifacts |
+| `site_dir` | `site` | Output directory for the Pages site |
+| `template_dir` | `scripts/pages` | Directory containing `index.html` template |
+
+**Execution flow:**
+
+```
+RPM Repositories:
+  1. Import GPG key into RPM database (rpm --import)
+  2. For each platform/arch artifact directory:
+     a. Copy .rpm files to site/valkey-N/rpm/<platform>/<arch>/
+     b. Sign each .rpm with rpmsign (SHA-256 digest, required for gpgcheck=1)
+     c. Create repo metadata with createrepo_c
+     d. Sign repomd.xml with GPG detached signature
+
+DEB Repositories:
+  1. For each platform/arch artifact directory:
+     a. Copy .deb files to site/valkey-N/deb/<platform>/<arch>/
+     b. Sign each .deb with debsigs (origin signature)
+     c. Generate Packages index with dpkg-scanpackages
+     d. Generate Release file with MD5, SHA1, SHA256 checksums
+     e. Sign Release → Release.gpg (detached) + InRelease (clearsigned)
+
+Site Generation:
+  1. Scan site/ for available version directories (valkey-7, valkey-9, etc.)
+  2. Copy index.html template, substitute %%PAGES_URL%% and %%VERSIONS%%
+  3. Export public GPG key as GPG-KEY-valkey.asc
+  4. Create .nojekyll marker
+```
+
+**Signing summary:**
+
+| Package type | What is signed | Tool | Verification |
+|-------------|----------------|------|-------------|
+| RPM packages | Individual `.rpm` files | `rpmsign --addsign` | `rpm -K <package>.rpm` |
+| RPM repo | `repomd.xml` | `gpg --detach-sign` | Automatic by `dnf`/`zypper` |
+| DEB packages | Individual `.deb` files | `debsigs --sign=origin` | `debsigs --verify <package>.deb` |
+| DEB repo | `Release` file | `gpg --detach-sign` + `gpg --clearsign` | Automatic by `apt` |
+
+**Required tools (installed in packages.yml):** `createrepo-c`, `dpkg-dev`, `debsigs`, `gpg`, `rpm`
+
+---
+
+### test_packages.sh
+
+**Purpose:** Automated test suite that installs built packages, validates installation, tests systemd services, and verifies clean removal. Runs inside Docker containers with systemd as PID 1.
+
+**Invoked by:** `packages.yml` → `test-rpm` and `test-deb` jobs (Docker exec)
+
+**Usage:**
+```bash
+test_packages.sh --pkg-dir=/path/to/packages [--version=X.Y.Z]
+```
+
+**Features:**
+- Auto-detects OS family (DEB vs RPM) and package prefix (`valkey-*` or `percona-valkey-*`)
+- Colored output with PASS/FAIL/SKIP indicators
+- Reports summary with pass/fail/skip counts
+
+**Test categories:**
+
+| Test | What it validates |
+|------|-------------------|
+| `test_binaries` | All expected binaries exist and are executable (`valkey-server`, `valkey-cli`, etc.) |
+| `test_user_group` | `valkey` user and group created correctly |
+| `test_directories` | Data, log, and runtime directories exist with correct permissions |
+| `test_config_files` | Configuration files installed at expected paths |
+| `test_systemd_unit_files` | Service and target unit files installed |
+| `test_systemd_service_hardening` | Security directives (ProtectSystem, NoNewPrivileges, etc.) |
+| `test_systemd_enable_disable` | `systemctl enable/disable` works correctly |
+| `test_systemd_start_stop_restart` | Service starts, stops, and restarts; PID file created |
+| `test_systemd_runtime_environment` | Server responds to `PING`, correct version, TLS enabled |
+| `test_systemd_restart_on_failure` | Service recovers after process kill |
+| `test_systemd_targets` | `valkey.target` and `valkey-sentinel.target` work |
+| `test_systemd_tmpfiles_sysctl` | tmpfiles.d and sysctl configurations applied |
+| `test_valkey_server_service` | Full server lifecycle test |
+| `test_valkey_sentinel_service` | Sentinel service lifecycle test |
+| `test_compat_redis` | Redis compatibility symlinks (`redis-server` → `valkey-server`, etc.) |
+| `test_dev_headers` | `valkeymodule.h` installed for module development |
+| `test_logrotate` | Logrotate configuration installed |
+| `test_clean_removal` | Package removal leaves no orphan files or broken services |
+
+---
+
+### setup-github-pages.sh
+
+**Purpose:** One-time setup script that configures everything needed for GitHub Pages package repository deployment.
+
+**Usage:**
+```bash
+./setup-github-pages.sh [--key-name "Name"] [--key-email "email@example.com"]
+```
+
+**Prerequisites:** `gh` CLI authenticated, `gpg` installed, run from inside the git repository.
+
+**What it does (5 steps):**
+
+```
+Step 1: Generate GPG signing key
+  └── RSA 4096-bit, 3-year expiry, no passphrase
+      Default: "Valkey Package Signing Key" <packages@valkey.io>
+
+Step 2: Store GPG private key as GitHub Actions secret
+  └── gpg --export-secret-keys | gh secret set GPG_PRIVATE_KEY
+
+Step 3: Enable workflow read/write permissions
+  └── gh api repos/.../actions/permissions/workflow (default_workflow_permissions=write)
+
+Step 4: Create gh-pages branch
+  └── Orphan branch with .nojekyll marker, pushed to origin
+
+Step 5: Configure GitHub Pages
+  └── gh api repos/.../pages (source: gh-pages branch, legacy build)
+```
+
+**Idempotent:** Each step checks if already done (key exists, branch exists, Pages enabled) and skips if so.
+
+---
+
+### pages/index.html
+
+**Purpose:** HTML template for the GitHub Pages landing page that provides package installation instructions for all supported platforms.
+
+**Used by:** `publish-repos.sh` (copies to site directory, substitutes `%%PAGES_URL%%` and `%%VERSIONS%%`)
+
+**Features:**
+- Version selector dropdown (populated from `%%VERSIONS%%`)
+- Platform auto-detection with manual override
+- Tab-based instructions for RPM (RHEL/Fedora), SUSE, and DEB (Debian/Ubuntu)
+- GPG key import and repository configuration commands
+- Dynamically generates correct `baseurl`/`deb` lines based on selected version and platform
+
+---
+
+### test_in_docker.sh
+
+**Purpose:** Convenience script for running `test_packages.sh` locally in Docker containers. Useful for testing packages without CI.
+
+### build-packages.sh
+
+**Purpose:** Legacy standalone build script (predates the `packages.yml` workflow). Builds RPM and DEB packages locally without GitHub Actions.
+
+### Python Utility Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `automate_alias_update.py` | Updates version aliases in the valkey-hashes repository |
+| `automate_website_description.py` | Updates release descriptions on the Valkey website |
+| `extract_hashes_info.py` | Extracts SHA256 hash information for release artifacts |
 
 ---
 
