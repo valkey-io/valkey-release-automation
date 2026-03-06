@@ -1,3 +1,0 @@
-[Unit]
-Description=Valkey Sentinel target allowing to start/stop all valkey-sentinel@.service instances at once
-
