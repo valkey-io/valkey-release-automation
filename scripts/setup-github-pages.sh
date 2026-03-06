@@ -21,18 +21,34 @@ set -euo pipefail
 KEY_NAME="Valkey Package Signing Key"
 KEY_EMAIL="packages@valkey.io"
 REPO=""
+S3_BUCKET=""
+S3_REGION=""
+AWS_KEY_ID=""
+AWS_SECRET=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo)      REPO="$2"; shift 2 ;;
-    --key-name)  KEY_NAME="$2"; shift 2 ;;
-    --key-email) KEY_EMAIL="$2"; shift 2 ;;
+    --repo)        REPO="$2"; shift 2 ;;
+    --key-name)    KEY_NAME="$2"; shift 2 ;;
+    --key-email)   KEY_EMAIL="$2"; shift 2 ;;
+    --s3-bucket)   S3_BUCKET="$2"; shift 2 ;;
+    --s3-region)   S3_REGION="$2"; shift 2 ;;
+    --aws-key-id)  AWS_KEY_ID="$2"; shift 2 ;;
+    --aws-secret)  AWS_SECRET="$2"; shift 2 ;;
     -h|--help)
       echo "Usage: $0 [--repo \"owner/repo\"] [--key-name \"Name\"] [--key-email \"email@example.com\"]"
+      echo "          [--s3-bucket BUCKET] [--s3-region REGION]"
+      echo "          [--aws-key-id KEY_ID] [--aws-secret SECRET]"
       echo ""
-      echo "  --repo    Target repository (e.g., \"myuser/valkey-release-automation\")."
-      echo "            If omitted, auto-detects from the current git remote."
+      echo "  --repo        Target repository (e.g., \"myuser/valkey-release-automation\")."
+      echo "                If omitted, auto-detects from the current git remote."
+      echo "  --s3-bucket   S3 bucket name for package hosting."
+      echo "  --s3-region   S3 bucket region (e.g., us-east-1)."
+      echo "  --aws-key-id  AWS Access Key ID for S3 uploads."
+      echo "  --aws-secret  AWS Secret Access Key for S3 uploads."
+      echo ""
+      echo "If S3/AWS options are omitted, the script will prompt interactively."
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -87,6 +103,32 @@ gh secret list --repo "${REPO}" | grep -q GPG_PRIVATE_KEY && echo "Verified: sec
   echo "ERROR: Secret was not created."
   exit 1
 }
+
+############################################################################
+# Step 2b: Store S3 credentials as GitHub Actions secrets
+############################################################################
+echo ""
+echo "=== Step 2b: Store S3 credentials ==="
+
+if [ -z "$S3_BUCKET" ]; then
+  read -rp "S3 Bucket name: " S3_BUCKET
+fi
+if [ -z "$S3_REGION" ]; then
+  read -rp "S3 Region (e.g., us-east-1): " S3_REGION
+fi
+if [ -z "$AWS_KEY_ID" ]; then
+  read -rp "AWS Access Key ID: " AWS_KEY_ID
+fi
+if [ -z "$AWS_SECRET" ]; then
+  read -rsp "AWS Secret Access Key: " AWS_SECRET
+  echo ""
+fi
+
+gh secret set S3_BUCKET --body "$S3_BUCKET" --repo "$REPO"
+gh secret set S3_REGION --body "$S3_REGION" --repo "$REPO"
+gh secret set AWS_ACCESS_KEY_ID --body "$AWS_KEY_ID" --repo "$REPO"
+gh secret set AWS_SECRET_ACCESS_KEY --body "$AWS_SECRET" --repo "$REPO"
+echo "S3 secrets stored."
 
 ############################################################################
 # Step 3: Enable read/write workflow permissions
@@ -153,11 +195,16 @@ echo "  Repository:  ${REPO}"
 echo "  GPG Key:     ${KEY_NAME} <${KEY_EMAIL}>"
 echo "  Fingerprint: ${FINGERPRINT}"
 echo "  Secret:      GPG_PRIVATE_KEY"
+echo "  S3 Bucket:   ${S3_BUCKET}"
+echo "  S3 Region:   ${S3_REGION}"
 echo "  Pages:       gh-pages branch"
 echo ""
 echo "Export the public key for reference:"
 echo "  gpg --armor --export ${KEY_EMAIL} > GPG-KEY-valkey.asc"
 echo ""
-echo "The packages workflow will now publish repos to:"
+echo "Packages will be published to:"
+echo "  https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com"
+echo ""
+echo "Install instructions will be at:"
 echo "  https://$(echo ${REPO} | tr '/' '.github.io/')"
 echo ""
