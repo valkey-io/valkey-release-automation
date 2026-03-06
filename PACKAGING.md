@@ -15,6 +15,7 @@ Comprehensive documentation for the Valkey release automation and packaging infr
 - [Patch System](#patch-system)
 - [Documentation Handling](#documentation-handling)
 - [Platform Support Matrix](#platform-support-matrix)
+- [Package Hosting Architecture](#package-hosting-architecture)
 - [Build Validation](#build-validation)
 - [Scripts Reference](#scripts-reference)
 
@@ -45,8 +46,9 @@ valkey-release-automation/
 │   ├── build-rpm.sh                         # RPM build script (runs in Docker)
 │   ├── build-deb.sh                         # DEB build script (runs in Docker)
 │   ├── generate-from-templates.sh           # Template processor (8.x/9.x+)
-│   ├── publish-repos.sh                     # Build + sign repos, deploy to GH Pages
-│   ├── setup-github-pages.sh                # One-time GPG + GH Pages setup
+│   ├── publish-to-s3.sh                     # Sign packages + build repos, upload to S3
+│   ├── publish-repos.sh                     # Generate GH Pages site (install instructions)
+│   ├── setup-github-pages.sh                # One-time GPG + GH Pages + S3 setup
 │   ├── test_packages.sh                     # Package install/removal test suite
 │   ├── test_in_docker.sh                    # Run test_packages.sh in Docker locally
 │   ├── build-packages.sh                    # Legacy standalone build script
@@ -126,7 +128,12 @@ valkey-release-automation/
                                              │                │
                                              ▼                ▼
                                        ┌──────────────────────────┐
-                                       │  publish-repos → GH Pages│
+                                       │  publish-to-s3 → S3      │
+                                       └────────────┬─────────────┘
+                                                    │
+                                                    ▼
+                                       ┌──────────────────────────┐
+                                       │  deploy-pages → GH Pages │
                                        └──────────────────────────┘
 ```
 
@@ -194,7 +201,8 @@ packages.yml
        ├──► test-rpm ──► install + systemd test on each platform
        ├──► test-deb ──► install + systemd test on each platform
        │
-       ├──► publish-repos ──► sign packages + create APT/YUM repos → deploy to GitHub Pages
+       ├──► publish-to-s3 ──► sign packages + create APT/YUM repos → upload to S3
+       ├──► deploy-pages ──► generate install instructions → deploy to GitHub Pages
        │
        └──► build-summary ──► aggregate results
 ```
@@ -914,6 +922,54 @@ DEB:   5 platforms × 2 architectures = 10 builds
 
 ---
 
+## Package Hosting Architecture
+
+Signed packages are hosted on **AWS S3** (public read), while install instructions and the GPG public key are served from **GitHub Pages**.
+
+```
+                    packages.yml
+                         │
+           ┌─────────────┴─────────────┐
+           │                           │
+    publish-to-s3                deploy-pages
+           │                           │
+           ▼                           ▼
+    ┌─────────────┐             ┌──────────────┐
+    │  S3 Bucket  │             │ GitHub Pages │
+    │             │             │              │
+    │ valkey-9/   │             │ index.html   │
+    │  rpm/el9/   │             │ GPG-KEY.asc  │
+    │  deb/...    │             └──────────────┘
+    │ GPG-KEY.asc │
+    └─────────────┘
+         ▲
+    dnf/apt/zypper
+```
+
+**GitHub Secrets required:**
+- `GPG_PRIVATE_KEY` — GPG signing key
+- `S3_BUCKET` — S3 bucket name
+- `S3_REGION` — S3 bucket region
+- `AWS_ACCESS_KEY_ID` — AWS access key for S3 uploads
+- `AWS_SECRET_ACCESS_KEY` — AWS secret key for S3 uploads
+
+**S3 bucket policy** (minimal public read):
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": "*",
+    "Action": "s3:GetObject",
+    "Resource": "arn:aws:s3:::BUCKET_NAME/*"
+  }]
+}
+```
+
+No static website hosting is needed — S3 direct URLs work for `dnf`/`apt`/`zypper`.
+
+---
+
 ## Build Validation
 
 ### RPM Validation Checks
@@ -1061,15 +1117,15 @@ Input: 9.0.3
 
 ---
 
-### publish-repos.sh
+### publish-to-s3.sh
 
-**Purpose:** Builds APT and YUM package repositories from build artifacts, signs packages and repository metadata with GPG, and generates the GitHub Pages site.
+**Purpose:** Signs packages, builds APT and YUM repositories, and uploads everything to an S3 bucket with public read access.
 
-**Invoked by:** `packages.yml` → `publish-repos` job (runs on `ubuntu-latest`, not in Docker)
+**Invoked by:** `packages.yml` → `publish-to-s3` job (runs on `ubuntu-latest`, not in Docker)
 
 **Usage:**
 ```bash
-publish-repos.sh <version> <gpg_fingerprint> <pages_url> <artifacts_dir> <site_dir> <template_dir>
+publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_region>
 ```
 
 **Arguments:**
@@ -1078,10 +1134,11 @@ publish-repos.sh <version> <gpg_fingerprint> <pages_url> <artifacts_dir> <site_d
 |----------|---------|-------------|
 | `version` | `9.0.3` | Valkey version (determines repo name `valkey-9`) |
 | `gpg_fingerprint` | `ABC123...` | GPG key fingerprint for signing |
-| `pages_url` | `https://owner.github.io/repo` | Base URL for the Pages site |
 | `artifacts_dir` | `artifacts` | Directory with downloaded build artifacts |
-| `site_dir` | `site` | Output directory for the Pages site |
-| `template_dir` | `scripts/pages` | Directory containing `index.html` template |
+| `s3_bucket` | `valkey-packages` | S3 bucket name |
+| `s3_region` | `us-east-1` | S3 bucket region |
+
+**Environment variables:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (from GitHub secrets)
 
 **Execution flow:**
 
@@ -1089,24 +1146,37 @@ publish-repos.sh <version> <gpg_fingerprint> <pages_url> <artifacts_dir> <site_d
 RPM Repositories:
   1. Import GPG key into RPM database (rpm --import)
   2. For each platform/arch artifact directory:
-     a. Copy .rpm files to site/valkey-N/rpm/<platform>/<arch>/
+     a. Stage .rpm files to staging/valkey-N/rpm/<platform>/<arch>/
      b. Sign each .rpm with rpmsign (SHA-256 digest, required for gpgcheck=1)
      c. Create repo metadata with createrepo_c
      d. Sign repomd.xml with GPG detached signature
 
 DEB Repositories:
   1. For each platform/arch artifact directory:
-     a. Copy .deb files to site/valkey-N/deb/<platform>/<arch>/
+     a. Stage .deb files to staging/valkey-N/deb/<platform>/<arch>/
      b. Sign each .deb with debsigs (origin signature)
      c. Generate Packages index with dpkg-scanpackages
      d. Generate Release file with MD5, SHA1, SHA256 checksums
      e. Sign Release → Release.gpg (detached) + InRelease (clearsigned)
 
-Site Generation:
-  1. Scan site/ for available version directories (valkey-7, valkey-9, etc.)
-  2. Copy index.html template, substitute %%PAGES_URL%% and %%VERSIONS%%
-  3. Export public GPG key as GPG-KEY-valkey.asc
-  4. Create .nojekyll marker
+Upload:
+  1. Export public GPG key as staging/GPG-KEY-valkey.asc
+  2. aws s3 sync staging/ s3://<bucket>/ --acl public-read
+```
+
+**S3 bucket structure:**
+```
+s3://bucket/
+├── GPG-KEY-valkey.asc
+├── valkey-9/
+│   ├── rpm/
+│   │   ├── el9/x86_64/*.rpm + repodata/
+│   │   └── ...
+│   └── deb/
+│       ├── debian12/amd64/*.deb + Packages + Release + InRelease
+│       └── ...
+└── valkey-8/
+    └── ...
 ```
 
 **Signing summary:**
@@ -1118,7 +1188,43 @@ Site Generation:
 | DEB packages | Individual `.deb` files | `debsigs --sign=origin` | `debsigs --verify <package>.deb` |
 | DEB repo | `Release` file | `gpg --detach-sign` + `gpg --clearsign` | Automatic by `apt` |
 
-**Required tools (installed in packages.yml):** `createrepo-c`, `dpkg-dev`, `debsigs`, `gpg`, `rpm`
+**Required tools (installed in packages.yml):** `createrepo-c`, `dpkg-dev`, `debsigs`, `gpg`, `rpm`, `awscli`
+
+---
+
+### publish-repos.sh
+
+**Purpose:** Generates the GitHub Pages site with install instructions and GPG public key. Packages are hosted on S3; this script only builds the static site.
+
+**Invoked by:** `packages.yml` → `deploy-pages` job (runs on `ubuntu-latest`)
+
+**Usage:**
+```bash
+publish-repos.sh <version> <gpg_fingerprint> <repo_url> <pages_url> <site_dir> <template_dir>
+```
+
+**Arguments:**
+
+| Argument | Example | Description |
+|----------|---------|-------------|
+| `version` | `9.0.3` | Valkey version (determines version list) |
+| `gpg_fingerprint` | `ABC123...` | GPG key fingerprint for exporting public key |
+| `repo_url` | `https://bucket.s3.region.amazonaws.com` | S3 base URL for package repos |
+| `pages_url` | `https://owner.github.io/repo` | GitHub Pages URL |
+| `site_dir` | `site` | Output directory for the Pages site |
+| `template_dir` | `scripts/pages` | Directory containing `index.html` template |
+
+**Execution flow:**
+
+```
+Site Generation:
+  1. Scan site/ for available version directories (valkey-7, valkey-9, etc.)
+  2. Copy index.html template, substitute %%PAGES_URL%%, %%REPO_URL%%, and %%VERSIONS%%
+  3. Export public GPG key as GPG-KEY-valkey.asc
+  4. Create .nojekyll marker
+```
+
+**Required tools:** `gpg`
 
 ---
 
@@ -1165,16 +1271,17 @@ test_packages.sh --pkg-dir=/path/to/packages [--version=X.Y.Z]
 
 ### setup-github-pages.sh
 
-**Purpose:** One-time setup script that configures everything needed for GitHub Pages package repository deployment.
+**Purpose:** One-time setup script that configures everything needed for GitHub Pages + S3 package repository deployment.
 
 **Usage:**
 ```bash
-./setup-github-pages.sh [--key-name "Name"] [--key-email "email@example.com"]
+./setup-github-pages.sh [--key-name "Name"] [--key-email "email@example.com"] \
+  [--s3-bucket BUCKET] [--s3-region REGION] [--aws-key-id KEY_ID] [--aws-secret SECRET]
 ```
 
 **Prerequisites:** `gh` CLI authenticated, `gpg` installed, run from inside the git repository.
 
-**What it does (5 steps):**
+**What it does (6 steps):**
 
 ```
 Step 1: Generate GPG signing key
@@ -1183,6 +1290,10 @@ Step 1: Generate GPG signing key
 
 Step 2: Store GPG private key as GitHub Actions secret
   └── gpg --export-secret-keys | gh secret set GPG_PRIVATE_KEY
+
+Step 2b: Store S3 credentials as GitHub Actions secrets
+  └── S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+      (interactive prompts or --s3-bucket/--s3-region/--aws-key-id/--aws-secret flags)
 
 Step 3: Enable workflow read/write permissions
   └── gh api repos/.../actions/permissions/workflow (default_workflow_permissions=write)
@@ -1202,7 +1313,7 @@ Step 5: Configure GitHub Pages
 
 **Purpose:** HTML template for the GitHub Pages landing page that provides package installation instructions for all supported platforms.
 
-**Used by:** `publish-repos.sh` (copies to site directory, substitutes `%%PAGES_URL%%` and `%%VERSIONS%%`)
+**Used by:** `publish-repos.sh` (copies to site directory, substitutes `%%PAGES_URL%%`, `%%REPO_URL%%`, and `%%VERSIONS%%`)
 
 **Features:**
 - Version selector dropdown (populated from `%%VERSIONS%%`)

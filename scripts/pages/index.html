@@ -391,7 +391,8 @@
   </div>
 
   <script>
-  var BASE = "%%PAGES_URL%%";
+  var PAGES_URL = "%%PAGES_URL%%";   // GitHub Pages (for GPG key link on the page)
+  var REPO_URL = "%%REPO_URL%%";     // S3 (for actual repo baseurl/deb lines)
   var AVAILABLE_VERSIONS = "%%VERSIONS%%";
 
   (function populateVersions() {
@@ -443,7 +444,7 @@
 
     var d = distros[os];
     var repo = "valkey-" + ver;
-    var repoBase = BASE + "/" + repo;
+    var repoBase = REPO_URL + "/" + repo;
 
     var names = document.querySelectorAll(".os-name");
     for (var i = 0; i < names.length; i++) names[i].textContent = d.name;
@@ -453,7 +454,7 @@
     if (d.type === "rpm") {
       document.getElementById("rpm-instructions").classList.add("active");
       document.getElementById("rpm-step1").textContent =
-        "sudo rpm --import " + BASE + "/GPG-KEY-valkey.asc";
+        "sudo rpm --import " + REPO_URL + "/GPG-KEY-valkey.asc";
       document.getElementById("rpm-step2").textContent =
         "sudo tee /etc/yum.repos.d/valkey.repo << 'EOF'\n" +
         "[valkey]\n" +
@@ -461,7 +462,7 @@
         "baseurl=" + repoBase + "/rpm/" + os + "/$basearch/\n" +
         "enabled=1\n" +
         "gpgcheck=1\n" +
-        "gpgkey=" + BASE + "/GPG-KEY-valkey.asc\n" +
+        "gpgkey=" + REPO_URL + "/GPG-KEY-valkey.asc\n" +
         "EOF";
       document.getElementById("rpm-step3").textContent =
         "sudo " + d.pkg + " makecache\nsudo " + d.pkg + " install valkey";
@@ -471,7 +472,7 @@
     } else if (d.type === "suse") {
       document.getElementById("suse-instructions").classList.add("active");
       document.getElementById("suse-step1").textContent =
-        "sudo rpm --import " + BASE + "/GPG-KEY-valkey.asc";
+        "sudo rpm --import " + REPO_URL + "/GPG-KEY-valkey.asc";
       document.getElementById("suse-step2").textContent =
         "sudo zypper addrepo --gpgcheck --refresh \\\n" +
         "  " + repoBase + "/rpm/" + os + "/\\$basearch/ \\\n" +
@@ -486,7 +487,7 @@
       document.getElementById("deb-step1").textContent =
         "sudo apt-get update\nsudo apt-get install -y curl gpg";
       document.getElementById("deb-step2").textContent =
-        "curl -fsSL " + BASE + "/GPG-KEY-valkey.asc \\\n" +
+        "curl -fsSL " + REPO_URL + "/GPG-KEY-valkey.asc \\\n" +
         "  | sudo gpg --dearmor -o /usr/share/keyrings/valkey-archive-keyring.gpg";
       document.getElementById("deb-step3").textContent =
         "ARCH=$(dpkg --print-architecture)\n" +
