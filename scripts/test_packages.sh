@@ -217,12 +217,14 @@ detect_os() {
         OS_FAMILY="deb"
     elif [[ -f /etc/redhat-release ]] || [[ -f /etc/centos-release ]] || [[ -f /etc/rocky-release ]] || [[ -f /etc/almalinux-release ]]; then
         OS_FAMILY="rpm"
-    elif command -v rpm &>/dev/null && command -v yum &>/dev/null; then
+    elif [[ -f /etc/SuSE-release ]] || grep -qi suse /etc/os-release 2>/dev/null; then
+        OS_FAMILY="rpm"
+    elif command -v rpm &>/dev/null && (command -v dnf &>/dev/null || command -v yum &>/dev/null || command -v zypper &>/dev/null); then
         OS_FAMILY="rpm"
     elif command -v dpkg &>/dev/null && command -v apt-get &>/dev/null; then
         OS_FAMILY="deb"
     else
-        echo "ERROR: Cannot detect OS family (neither Debian nor RHEL based)" >&2
+        echo "ERROR: Cannot detect OS family (neither Debian nor RHEL based nor SUSE)" >&2
         exit 1
     fi
     echo "Detected OS family: $OS_FAMILY"
@@ -308,7 +310,15 @@ install_packages_rpm() {
     fi
 
     echo "Installing ${#rpms[@]} package(s)..."
-    yum localinstall -y "${rpms[@]}" 2>&1
+    if command -v zypper &>/dev/null; then
+        zypper -n install --allow-unsigned-rpm "${rpms[@]}" 2>&1
+    elif command -v dnf5 &>/dev/null; then
+        dnf5 install -y "${rpms[@]}" 2>&1
+    elif command -v dnf &>/dev/null; then
+        dnf install -y "${rpms[@]}" 2>&1
+    else
+        yum localinstall -y "${rpms[@]}" 2>&1
+    fi
     # Capture installed package names and versions
     while IFS= read -r line; do
         [[ -n "$line" ]] && INSTALLED_PKGS+=("$line")
@@ -338,7 +348,15 @@ remove_packages_rpm() {
     if [[ -n "$pkgs" ]]; then
         echo "Removing: $pkgs"
         # shellcheck disable=SC2086
-        yum remove -y $pkgs 2>&1
+        if command -v zypper &>/dev/null; then
+            zypper -n remove $pkgs 2>&1
+        elif command -v dnf5 &>/dev/null; then
+            dnf5 remove -y $pkgs 2>&1
+        elif command -v dnf &>/dev/null; then
+            dnf remove -y $pkgs 2>&1
+        else
+            yum remove -y $pkgs 2>&1
+        fi
     else
         echo "No ${PKG_PREFIX} packages found to remove."
     fi
@@ -359,16 +377,31 @@ test_binaries() {
 
     # Version checks
     if [[ -n "$EXPECTED_VERSION" ]]; then
-        local ver_bins=(valkey-server valkey-cli)
-        for bin in "${ver_bins[@]}"; do
-            local ver_output
-            ver_output="$("$bin" --version 2>&1)" || true
+        # valkey-server --version uses VALKEY_VERSION (correct).
+        # valkey-cli --version uses REDIS_VERSION in 7.2.x (upstream bug:
+        # reports Redis compat version 7.2.4 instead of actual Valkey version).
+        # Only check valkey-server for the expected version; for valkey-cli
+        # just verify it runs and reports *some* version.
+        local ver_output
+        ver_output="$(valkey-server --version 2>&1)" || true
+        if [[ "$ver_output" == *"$EXPECTED_VERSION"* ]]; then
+            pass "valkey-server version contains $EXPECTED_VERSION"
+        else
+            fail "valkey-server version contains $EXPECTED_VERSION (got: $ver_output)"
+        fi
+
+        # Skip valkey-cli version check for 7.x — upstream bug: valkey-cli.c
+        # uses REDIS_VERSION ("7.2.4") instead of VALKEY_VERSION
+        if [[ "$EXPECTED_VERSION" == 7.* ]]; then
+            skip "valkey-cli version check (7.x uses REDIS_VERSION compat)"
+        else
+            ver_output="$(valkey-cli --version 2>&1)" || true
             if [[ "$ver_output" == *"$EXPECTED_VERSION"* ]]; then
-                pass "$bin version contains $EXPECTED_VERSION"
+                pass "valkey-cli version contains $EXPECTED_VERSION"
             else
-                fail "$bin version contains $EXPECTED_VERSION (got: $ver_output)"
+                fail "valkey-cli version contains $EXPECTED_VERSION (got: $ver_output)"
             fi
-        done
+        fi
     fi
 }
 
@@ -951,8 +984,19 @@ test_valkey_server_service() {
     valkey-cli DEL __test_key__ >/dev/null 2>&1 || true
 
     # Process runs as valkey user
-    local proc_user
+    local proc_user=""
+    # Try ps -C first, then pgrep + ps fallback (ps -C may not match on all distros)
     proc_user="$(ps -o user= -C valkey-server 2>/dev/null | head -1 | tr -d ' ')" || true
+    if [[ -z "$proc_user" ]]; then
+        local pid
+        pid="$(pgrep -x valkey-server 2>/dev/null | head -1)" || true
+        if [[ -z "$pid" ]]; then
+            pid="$(pgrep -f 'valkey-server' 2>/dev/null | head -1)" || true
+        fi
+        if [[ -n "$pid" ]]; then
+            proc_user="$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')" || true
+        fi
+    fi
     if [[ "$proc_user" == "valkey" ]]; then
         pass "valkey-server runs as valkey user"
     else
@@ -1033,7 +1077,14 @@ test_compat_redis() {
     assert_command_succeeds "redis-cli --version" redis-cli --version
 
     if [[ "$OS_FAMILY" == "rpm" ]]; then
-        assert_file_exists /usr/libexec/migrate_redis_to_valkey.bash "migrate_redis_to_valkey.bash"
+        # _libexecdir varies: /usr/libexec on most distros, /usr/lib on SUSE
+        if [[ -f /usr/libexec/migrate_redis_to_valkey.bash ]]; then
+            pass "migrate_redis_to_valkey.bash exists"
+        elif [[ -f /usr/lib/migrate_redis_to_valkey.bash ]]; then
+            pass "migrate_redis_to_valkey.bash exists (in /usr/lib)"
+        else
+            fail "migrate_redis_to_valkey.bash exists (not found in /usr/libexec or /usr/lib)"
+        fi
     fi
 }
 
