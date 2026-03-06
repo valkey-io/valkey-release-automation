@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Valkey Package Repository</title>
+  <link rel="icon" href="https://valkey.io/img/Valkey_Logo_Compact.svg" type="image/svg+xml">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --valkey-dark: #1a2026;
+      --valkey-blue: #6983ff;
+      --valkey-blue-hover: #5570ee;
+      --valkey-link: #0053b8;
+      --valkey-heading: #002a3a;
+      --valkey-bg: #ffffff;
+      --valkey-gray-light: #f5f7f7;
+      --valkey-gray-section: #e9eef7;
+      --valkey-gray-border: #eaeaea;
+      --valkey-card-bg: #f1f0fa;
+      --valkey-text: #1a2026;
+      --valkey-text-secondary: #6b7a8d;
+      --valkey-hero-bg: #30186e;
+      --valkey-footer-bg: #1a2026;
+    }
+    body {
+      font-family: "Open Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--valkey-text);
+      background: var(--valkey-bg);
+      line-height: 1.6;
+    }
+
+    /* Header / Navbar */
+    .navbar {
+      background: var(--valkey-hero-bg);
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .navbar a { text-decoration: none; }
+    .navbar .logo { height: 32px; }
+    .navbar .nav-links { display: flex; gap: 1.5rem; align-items: center; }
+    .navbar .nav-links a {
+      color: rgba(255,255,255,0.8);
+      font-size: 0.9rem;
+      transition: color 0.2s;
+    }
+    .navbar .nav-links a:hover { color: #fff; }
+
+    /* Hero */
+    .hero {
+      background: var(--valkey-hero-bg);
+      color: #fff;
+      padding: 3rem 2rem 2.5rem;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      letter-spacing: -0.02em;
+    }
+    .hero p {
+      font-size: 1.15rem;
+      color: rgba(255,255,255,0.75);
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    /* Main content */
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    /* Selector */
+    .selector {
+      background: var(--valkey-card-bg);
+      border: 1px solid var(--valkey-gray-border);
+      border-radius: 10px;
+      padding: 1.75rem;
+      margin: 0 0 2rem;
+    }
+    .selector-row {
+      display: flex;
+      gap: 1rem;
+    }
+    .selector-col {
+      flex: 1;
+    }
+    .selector label {
+      font-weight: 600;
+      display: block;
+      margin-bottom: 0.4rem;
+      font-size: 0.95rem;
+      color: var(--valkey-heading);
+    }
+    .selector select {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      font-size: 0.95rem;
+      border: 1px solid var(--valkey-gray-border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--valkey-text);
+      appearance: auto;
+    }
+    .selector select:focus {
+      outline: none;
+      border-color: var(--valkey-blue);
+      box-shadow: 0 0 0 3px rgba(105,131,255,0.15);
+    }
+    @media (max-width: 600px) {
+      .selector-row { flex-direction: column; }
+    }
+
+    /* Instructions */
+    .instructions { display: none; margin-top: 1.5rem; }
+    .instructions.active { display: block; }
+
+    h2 {
+      color: var(--valkey-heading);
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 1.25rem;
+      letter-spacing: -0.01em;
+    }
+
+    /* Steps */
+    .step {
+      margin: 1.25rem 0;
+    }
+    .step-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--valkey-blue);
+      color: #fff;
+      width: 1.5rem;
+      height: 1.5rem;
+      border-radius: 50%;
+      font-size: 0.8rem;
+      font-weight: 700;
+      margin-right: 0.6rem;
+      flex-shrink: 0;
+    }
+    .step-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: var(--valkey-heading);
+    }
+
+    /* Code blocks */
+    pre {
+      background: var(--valkey-footer-bg);
+      color: #e0e6ed;
+      padding: 1rem 1.25rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.875rem;
+      font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", Menlo, monospace;
+      position: relative;
+      line-height: 1.5;
+    }
+    pre .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.6);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 5px;
+      padding: 0.2rem 0.6rem;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+    pre .copy-btn:hover {
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+    }
+
+    code {
+      background: var(--valkey-gray-section);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.875em;
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+    }
+
+    /* Sections */
+    .section {
+      margin-top: 2.5rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--valkey-gray-border);
+    }
+    .section h2 { margin-bottom: 0.75rem; }
+    .section p { color: var(--valkey-text-secondary); }
+    .section a {
+      color: var(--valkey-link);
+      text-decoration: none;
+    }
+    .section a:hover {
+      color: var(--valkey-blue);
+      text-decoration: underline;
+    }
+
+    /* No-selection message */
+    #no-selection p {
+      color: var(--valkey-text-secondary);
+      text-align: center;
+      padding: 2rem 0;
+      font-size: 1rem;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--valkey-gray-border);
+      margin-top: 3rem;
+      padding: 1.5rem 0;
+      text-align: center;
+      color: var(--valkey-text-secondary);
+      font-size: 0.85rem;
+    }
+    footer a {
+      color: var(--valkey-link);
+      text-decoration: none;
+    }
+    footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+  <nav class="navbar">
+    <a href="https://valkey.io">
+      <img class="logo" src="https://valkey.io/img/valkey-horizontal.svg" alt="Valkey" style="filter: brightness(0) invert(1);">
+    </a>
+    <div class="nav-links">
+      <a href="https://valkey.io/docs/">Docs</a>
+      <a href="https://valkey.io/blog/">Blog</a>
+      <a href="https://valkey.io/community/">Community</a>
+      <a href="https://github.com/valkey-io/valkey">GitHub</a>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <h1>Package Repository</h1>
+    <p>Install Valkey on your Linux distribution using official RPM and DEB packages.</p>
+  </div>
+
+  <div class="container">
+
+    <div class="selector">
+      <div class="selector-row">
+        <div class="selector-col">
+          <label for="version-select">Valkey version</label>
+          <select id="version-select" onchange="showInstructions()">
+            <option value="">-- Choose version --</option>
+          </select>
+        </div>
+        <div class="selector-col">
+          <label for="os-select">Operating system</label>
+          <select id="os-select" onchange="showInstructions()">
+            <option value="">-- Choose your OS --</option>
+            <optgroup label="RHEL / Oracle Linux">
+              <option value="el8">Oracle Linux 8 / RHEL 8</option>
+              <option value="el9">Oracle Linux 9 / RHEL 9</option>
+              <option value="el10">Oracle Linux 10 / RHEL 10</option>
+            </optgroup>
+            <optgroup label="Rocky Linux">
+              <option value="rocky8">Rocky Linux 8</option>
+              <option value="rocky9">Rocky Linux 9</option>
+              <option value="rocky10">Rocky Linux 10</option>
+            </optgroup>
+            <optgroup label="AlmaLinux">
+              <option value="alma8">AlmaLinux 8</option>
+              <option value="alma9">AlmaLinux 9</option>
+              <option value="alma10">AlmaLinux 10</option>
+            </optgroup>
+            <optgroup label="Amazon Linux">
+              <option value="amzn2023">Amazon Linux 2023</option>
+            </optgroup>
+            <optgroup label="Fedora">
+              <option value="fedora39">Fedora 39</option>
+              <option value="fedora40">Fedora 40</option>
+              <option value="fedora41">Fedora 41</option>
+            </optgroup>
+            <optgroup label="openSUSE">
+              <option value="opensuse-15.5">openSUSE Leap 15.5</option>
+              <option value="opensuse-15.6">openSUSE Leap 15.6</option>
+            </optgroup>
+            <optgroup label="Debian">
+              <option value="debian11">Debian 11 (Bullseye)</option>
+              <option value="debian12">Debian 12 (Bookworm)</option>
+              <option value="debian13">Debian 13 (Trixie)</option>
+            </optgroup>
+            <optgroup label="Ubuntu">
+              <option value="ubuntu2204">Ubuntu 22.04 (Jammy)</option>
+              <option value="ubuntu2404">Ubuntu 24.04 (Noble)</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div id="no-selection" class="instructions active">
+      <p>Select a Valkey version and your operating system to get installation instructions.</p>
+    </div>
+
+    <div id="rpm-instructions" class="instructions">
+      <h2>Install Valkey <span class="ver-name"></span> on <span class="os-name"></span></h2>
+      <div class="step">
+        <div class="step-header"><span class="step-num">1</span><span class="step-title">Import the GPG signing key</span></div>
+        <pre id="rpm-step1"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">2</span><span class="step-title">Add the Valkey repository</span></div>
+        <pre id="rpm-step2"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">3</span><span class="step-title">Install Valkey</span></div>
+        <pre id="rpm-step3"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">4</span><span class="step-title">Start Valkey</span></div>
+        <pre id="rpm-step4"></pre>
+      </div>
+    </div>
+
+    <div id="suse-instructions" class="instructions">
+      <h2>Install Valkey <span class="ver-name"></span> on <span class="os-name"></span></h2>
+      <div class="step">
+        <div class="step-header"><span class="step-num">1</span><span class="step-title">Import the GPG signing key</span></div>
+        <pre id="suse-step1"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">2</span><span class="step-title">Add the Valkey repository</span></div>
+        <pre id="suse-step2"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">3</span><span class="step-title">Install Valkey</span></div>
+        <pre id="suse-step3"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">4</span><span class="step-title">Start Valkey</span></div>
+        <pre id="suse-step4"></pre>
+      </div>
+    </div>
+
+    <div id="deb-instructions" class="instructions">
+      <h2>Install Valkey <span class="ver-name"></span> on <span class="os-name"></span></h2>
+      <div class="step">
+        <div class="step-header"><span class="step-num">1</span><span class="step-title">Install prerequisites</span></div>
+        <pre id="deb-step1"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">2</span><span class="step-title">Import the GPG signing key</span></div>
+        <pre id="deb-step2"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">3</span><span class="step-title">Add the Valkey repository</span></div>
+        <pre id="deb-step3"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">4</span><span class="step-title">Install Valkey</span></div>
+        <pre id="deb-step4"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">5</span><span class="step-title">Start Valkey</span></div>
+        <pre id="deb-step5"></pre>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>GPG Key</h2>
+      <p>All packages are signed with our GPG key. Download the public key:
+      <a href="GPG-KEY-valkey.asc">GPG-KEY-valkey.asc</a></p>
+    </div>
+
+    <footer>
+      <p><a href="https://valkey.io">Valkey</a> &middot; <a href="https://github.com/valkey-io/valkey">GitHub</a> &middot; <a href="https://valkey.io/docs/">Documentation</a></p>
+    </footer>
+  </div>
+
+  <script>
+  var PAGES_URL = "%%PAGES_URL%%";   // GitHub Pages (for GPG key link on the page)
+  var REPO_URL = "%%REPO_URL%%";     // S3 (for actual repo baseurl/deb lines)
+  var AVAILABLE_VERSIONS = "%%VERSIONS%%";
+
+  (function populateVersions() {
+    var sel = document.getElementById("version-select");
+    var versions = AVAILABLE_VERSIONS.split(",").filter(Boolean).sort(function(a, b) {
+      return parseInt(b) - parseInt(a);
+    });
+    for (var i = 0; i < versions.length; i++) {
+      var opt = document.createElement("option");
+      opt.value = versions[i];
+      opt.textContent = "Valkey " + versions[i] + ".x";
+      sel.appendChild(opt);
+    }
+  })();
+
+  var distros = {
+    el8:       { name: "Oracle Linux 8 / RHEL 8", type: "rpm", pkg: "dnf" },
+    el9:       { name: "Oracle Linux 9 / RHEL 9", type: "rpm", pkg: "dnf" },
+    el10:      { name: "Oracle Linux 10 / RHEL 10", type: "rpm", pkg: "dnf" },
+    rocky8:    { name: "Rocky Linux 8", type: "rpm", pkg: "dnf" },
+    rocky9:    { name: "Rocky Linux 9", type: "rpm", pkg: "dnf" },
+    rocky10:   { name: "Rocky Linux 10", type: "rpm", pkg: "dnf" },
+    alma8:     { name: "AlmaLinux 8", type: "rpm", pkg: "dnf" },
+    alma9:     { name: "AlmaLinux 9", type: "rpm", pkg: "dnf" },
+    alma10:    { name: "AlmaLinux 10", type: "rpm", pkg: "dnf" },
+    amzn2023:  { name: "Amazon Linux 2023", type: "rpm", pkg: "dnf" },
+    fedora39:  { name: "Fedora 39", type: "rpm", pkg: "dnf" },
+    fedora40:  { name: "Fedora 40", type: "rpm", pkg: "dnf" },
+    fedora41:  { name: "Fedora 41", type: "rpm", pkg: "dnf" },
+    "opensuse-15.5": { name: "openSUSE Leap 15.5", type: "suse", pkg: "zypper" },
+    "opensuse-15.6": { name: "openSUSE Leap 15.6", type: "suse", pkg: "zypper" },
+    debian11:  { name: "Debian 11 (Bullseye)", type: "deb" },
+    debian12:  { name: "Debian 12 (Bookworm)", type: "deb" },
+    debian13:  { name: "Debian 13 (Trixie)", type: "deb" },
+    ubuntu2204:{ name: "Ubuntu 22.04 (Jammy)", type: "deb" },
+    ubuntu2404:{ name: "Ubuntu 24.04 (Noble)", type: "deb" }
+  };
+
+  function showInstructions() {
+    var os = document.getElementById("os-select").value;
+    var ver = document.getElementById("version-select").value;
+    var sections = document.querySelectorAll(".instructions");
+    for (var i = 0; i < sections.length; i++) sections[i].classList.remove("active");
+
+    if (!os || !ver || !distros[os]) {
+      document.getElementById("no-selection").classList.add("active");
+      return;
+    }
+
+    var d = distros[os];
+    var repo = "valkey-" + ver;
+    var repoBase = REPO_URL + "/" + repo;
+
+    var names = document.querySelectorAll(".os-name");
+    for (var i = 0; i < names.length; i++) names[i].textContent = d.name;
+    var vnames = document.querySelectorAll(".ver-name");
+    for (var i = 0; i < vnames.length; i++) vnames[i].textContent = ver + ".x";
+
+    if (d.type === "rpm") {
+      document.getElementById("rpm-instructions").classList.add("active");
+      document.getElementById("rpm-step1").textContent =
+        "sudo rpm --import " + REPO_URL + "/GPG-KEY-valkey.asc";
+      document.getElementById("rpm-step2").textContent =
+        "sudo tee /etc/yum.repos.d/valkey.repo << 'EOF'\n" +
+        "[valkey]\n" +
+        "name=Valkey " + ver + ".x Packages for " + d.name + "\n" +
+        "baseurl=" + repoBase + "/rpm/" + os + "/$basearch/\n" +
+        "enabled=1\n" +
+        "gpgcheck=1\n" +
+        "gpgkey=" + REPO_URL + "/GPG-KEY-valkey.asc\n" +
+        "EOF";
+      document.getElementById("rpm-step3").textContent =
+        "sudo " + d.pkg + " makecache\nsudo " + d.pkg + " install valkey";
+      document.getElementById("rpm-step4").textContent =
+        "sudo systemctl enable --now valkey";
+
+    } else if (d.type === "suse") {
+      document.getElementById("suse-instructions").classList.add("active");
+      document.getElementById("suse-step1").textContent =
+        "sudo rpm --import " + REPO_URL + "/GPG-KEY-valkey.asc";
+      document.getElementById("suse-step2").textContent =
+        "sudo zypper addrepo --gpgcheck --refresh \\\n" +
+        "  " + repoBase + "/rpm/" + os + "/\\$basearch/ \\\n" +
+        "  valkey";
+      document.getElementById("suse-step3").textContent =
+        "sudo zypper refresh\nsudo zypper install valkey";
+      document.getElementById("suse-step4").textContent =
+        "sudo systemctl enable --now valkey";
+
+    } else if (d.type === "deb") {
+      document.getElementById("deb-instructions").classList.add("active");
+      document.getElementById("deb-step1").textContent =
+        "sudo apt-get update\nsudo apt-get install -y curl gpg";
+      document.getElementById("deb-step2").textContent =
+        "curl -fsSL " + REPO_URL + "/GPG-KEY-valkey.asc \\\n" +
+        "  | sudo gpg --dearmor -o /usr/share/keyrings/valkey-archive-keyring.gpg";
+      document.getElementById("deb-step3").textContent =
+        "ARCH=$(dpkg --print-architecture)\n" +
+        "echo \"deb [signed-by=/usr/share/keyrings/valkey-archive-keyring.gpg] " +
+        repoBase + "/deb/" + os + "/ ${ARCH}/\" \\\n" +
+        "  | sudo tee /etc/apt/sources.list.d/valkey.list";
+      document.getElementById("deb-step4").textContent =
+        "sudo apt-get update\nsudo apt-get install -y valkey-server";
+      document.getElementById("deb-step5").textContent =
+        "sudo systemctl enable --now valkey-server";
+    }
+
+    addCopyButtons();
+  }
+
+  function addCopyButtons() {
+    var blocks = document.querySelectorAll(".instructions.active pre");
+    for (var i = 0; i < blocks.length; i++) {
+      var existing = blocks[i].querySelector(".copy-btn");
+      if (existing) existing.remove();
+      var btn = document.createElement("button");
+      btn.className = "copy-btn";
+      btn.textContent = "Copy";
+      btn.onclick = (function(pre) {
+        return function() {
+          navigator.clipboard.writeText(pre.textContent.replace("Copy", "").trim());
+          this.textContent = "Copied!";
+          var b = this;
+          setTimeout(function() { b.textContent = "Copy"; }, 2000);
+        };
+      })(blocks[i]);
+      blocks[i].appendChild(btn);
+    }
+  }
+  </script>
+</body>
+</html>

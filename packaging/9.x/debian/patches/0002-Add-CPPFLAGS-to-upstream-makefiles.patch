@@ -1,0 +1,65 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 28 Apr 2025 15:45:49 -0300
+Subject: Add CPPFLAGS to upstream makefiles
+
+Last-Update: 30-01-2026
+---
+ deps/fpconv/Makefile        | 2 +-
+ deps/hdr_histogram/Makefile | 2 +-
+ deps/linenoise/Makefile     | 2 +-
+ src/Makefile                | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/deps/fpconv/Makefile b/deps/fpconv/Makefile
+index 2654888..64d2ed0 100644
+--- a/deps/fpconv/Makefile
++++ b/deps/fpconv/Makefile
+@@ -2,7 +2,7 @@ STD=
+ WARN= -Wall
+ OPT= -Os
+ 
+-R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS)
++R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(CPPFLAGS)
+ R_LDFLAGS= $(LDFLAGS)
+ DEBUG= -g
+ 
+diff --git a/deps/hdr_histogram/Makefile b/deps/hdr_histogram/Makefile
+index 28dd93e..3a6413e 100644
+--- a/deps/hdr_histogram/Makefile
++++ b/deps/hdr_histogram/Makefile
+@@ -2,7 +2,7 @@ STD= -std=c99
+ WARN= -Wall
+ OPT= -Os
+ 
+-R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) -DHDR_MALLOC_INCLUDE=\"hdr_redis_malloc.h\"
++R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(CPPFLAGS) -DHDR_MALLOC_INCLUDE=\"hdr_redis_malloc.h\"
+ R_LDFLAGS= $(LDFLAGS)
+ DEBUG= -g
+ 
+diff --git a/deps/linenoise/Makefile b/deps/linenoise/Makefile
+index 1dd894b..12ada21 100644
+--- a/deps/linenoise/Makefile
++++ b/deps/linenoise/Makefile
+@@ -6,7 +6,7 @@ R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS)
+ R_LDFLAGS= $(LDFLAGS)
+ DEBUG= -g
+ 
+-R_CC=$(CC) $(R_CFLAGS)
++R_CC=$(CC) $(R_CFLAGS) $(CPPFLAGS)
+ R_LD=$(CC) $(R_LDFLAGS)
+ 
+ linenoise.o: linenoise.h linenoise.c
+diff --git a/src/Makefile b/src/Makefile
+index 1437f41..ac88fc0 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -391,7 +391,7 @@ else
+ 	MAYBE_UNINSTALL_REDIS_SYMLINK=
+ endif
+ 
+-SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS) -I.
++SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS) $(CPPFLAGS) -I.
+ SERVER_AR=$(QUIET_AR)$(AR)
+ SERVER_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
+ ENGINE_INSTALL=$(QUIET_INSTALL)$(INSTALL)
+

@@ -1,0 +1,4 @@
+usr/bin/valkey-cli
+usr/bin/valkey-benchmark
+usr/bin/valkey-check-aof
+usr/bin/valkey-check-rdb
