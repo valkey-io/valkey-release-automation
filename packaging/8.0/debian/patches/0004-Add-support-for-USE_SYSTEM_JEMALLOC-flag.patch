@@ -3,22 +3,21 @@ Date: Mon, 28 Apr 2025 15:45:49 -0300
 Subject: Add support for USE_SYSTEM_JEMALLOC flag.
 
 Last-Update: 30-01-2026
-Updated for Valkey 8.x (hiredis, line numbers adjusted)
+Updated for Valkey 8.0.x (hiredis, line numbers adjusted)
 ---
- deps/Makefile	2026-03-04 17:43:45.562730040 +0200 |  2 ++
- src/Makefile	2026-03-04 17:43:45.927730114 +0200 |  5 +++++
- src/debug.c	2026-03-04 17:43:45.696730067 +0200 |  4 ++++
- src/object.c	2026-03-04 17:43:45.706730069 +0200 |  5 +++++
- src/sds.c	2026-03-04 17:43:45.709730070 +0200 |  4 ++++
- src/zmalloc.c	2026-03-04 17:43:45.718730072 +0200 | 11 +++++++++++
- src/zmalloc.h	2026-03-04 17:43:45.718730072 +0200 |  4 ++++
- 7 files changed, 35 insertions(+), 0 deletions(-)
+ deps/Makefile |  2 ++
+ src/Makefile  |  5 +++++
+ src/debug.c   |  4 ++++
+ src/object.c  |  5 +++++
+ src/sds.c     |  4 ++++
+ src/zmalloc.c | 10 ++++++++++
+ src/zmalloc.h |  4 ++++
+ 7 files changed, 34 insertions(+), 0 deletions(-)
 
-diff -ruN a/deps/Makefile b/deps/Makefile
-diff --git a/deps/Makefile	2026-03-04 17:43:45.562730040 +0200 b/deps/Makefile	2026-03-04 17:43:45.562730040 +0200
+diff --git a/deps/Makefile b/deps/Makefile
 index 1234567..abcdef0 100644
---- a/deps/Makefile	2026-03-04 17:43:45.562730040 +0200
-+++ b/deps/Makefile	2026-03-04 17:44:16.580735038 +0200
+--- a/deps/Makefile
++++ b/deps/Makefile
 @@ -39,7 +39,9 @@
  	-(cd hiredis && $(MAKE) clean) > /dev/null || true
  	-(cd linenoise && $(MAKE) clean) > /dev/null || true
@@ -28,31 +27,29 @@ index 1234567..abcdef0 100644
 +endif
  	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
  	-(cd fpconv && $(MAKE) clean) > /dev/null || true
- 	-(cd fast_float_c_interface && $(MAKE) clean) > /dev/null || true
-diff -ruN a/src/debug.c b/src/debug.c
-diff --git a/src/debug.c	2026-03-04 17:43:45.696730067 +0200 b/src/debug.c	2026-03-04 17:43:45.696730067 +0200
+ 	-(rm -f .make-*)
+diff --git a/src/debug.c b/src/debug.c
 index 1234567..abcdef0 100644
---- a/src/debug.c	2026-03-04 17:43:45.696730067 +0200
-+++ b/src/debug.c	2026-03-04 17:44:16.581735038 +0200
+--- a/src/debug.c
++++ b/src/debug.c
 @@ -82,6 +82,10 @@
  void logStackTrace(void *eip, int uplevel, int current_thread);
  void sigalrmSignalHandler(int sig, siginfo_t *info, void *secret);
- 
+
 +#if defined(USE_JEMALLOC) && defined(USE_SYSTEM_JEMALLOC)
 +#define je_mallctl mallctl
 +#endif
 +
  /* ================================= Debugging ============================== */
- 
+
  /* Compute the sha1 of string at 's' with 'len' bytes long.
-diff -ruN a/src/Makefile b/src/Makefile
-diff --git a/src/Makefile	2026-03-04 17:43:45.927730114 +0200 b/src/Makefile	2026-03-04 17:43:45.927730114 +0200
+diff --git a/src/Makefile b/src/Makefile
 index 1234567..abcdef0 100644
---- a/src/Makefile	2026-03-04 17:43:45.927730114 +0200
-+++ b/src/Makefile	2026-03-04 17:44:16.580735038 +0200
+--- a/src/Makefile
++++ b/src/Makefile
 @@ -290,10 +290,15 @@
  endif
- 
+
  ifeq ($(MALLOC),jemalloc)
 +ifeq ($(USE_SYSTEM_JEMALLOC),yes)
 +	FINAL_CFLAGS+= -DUSE_JEMALLOC -DUSE_SYSTEM_JEMALLOC -I/usr/include/jemalloc
@@ -63,48 +60,45 @@ index 1234567..abcdef0 100644
  	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
  endif
 +endif
- 
+
  # LIBSSL & LIBCRYPTO
  LIBSSL_LIBS=
-diff -ruN a/src/object.c b/src/object.c
-diff --git a/src/object.c	2026-03-04 17:43:45.706730069 +0200 b/src/object.c	2026-03-04 17:43:45.706730069 +0200
+diff --git a/src/object.c b/src/object.c
 index 1234567..abcdef0 100644
---- a/src/object.c	2026-03-04 17:43:45.706730069 +0200
-+++ b/src/object.c	2026-03-04 17:44:16.581735038 +0200
-@@ -46,6 +46,11 @@
-  * so if expire is set later, we don't need to reallocate the object. */
- #define KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD 128
- 
+--- a/src/object.c
++++ b/src/object.c
+@@ -41,6 +41,11 @@
+ #define strtold(a, b) ((long double)strtod((a), (b)))
+ #endif
+
 +#if defined(USE_JEMALLOC) && defined(USE_SYSTEM_JEMALLOC)
 +#define je_mallctl mallctl
 +#define je_malloc_stats_print malloc_stats_print
 +#endif
 +
  /* ===================== Creation and parsing of objects ==================== */
- 
- /* Creates an object, optionally with embedded key and expire fields. The key
-diff -ruN a/src/sds.c b/src/sds.c
-diff --git a/src/sds.c	2026-03-04 17:43:45.709730070 +0200 b/src/sds.c	2026-03-04 17:43:45.709730070 +0200
+
+ robj *createObject(int type, void *ptr) {
+diff --git a/src/sds.c b/src/sds.c
 index 1234567..abcdef0 100644
---- a/src/sds.c	2026-03-04 17:43:45.709730070 +0200
-+++ b/src/sds.c	2026-03-04 17:44:16.582735038 +0200
+--- a/src/sds.c
++++ b/src/sds.c
 @@ -39,6 +39,10 @@
  #include "sdsalloc.h"
  #include "util.h"
- 
+
 +#ifdef USE_SYSTEM_JEMALLOC
 +#define je_nallocx(size, flags) nallocx(size, flags)
 +#endif
 +
  const char *SDS_NOINIT = "SDS_NOINIT";
- 
- int sdsHdrSize(char type) {
-diff -ruN a/src/zmalloc.c b/src/zmalloc.c
-diff --git a/src/zmalloc.c	2026-03-04 17:43:45.718730072 +0200 b/src/zmalloc.c	2026-03-04 17:43:45.718730072 +0200
+
+ static inline int sdsHdrSize(char type) {
+diff --git a/src/zmalloc.c b/src/zmalloc.c
 index 1234567..abcdef0 100644
---- a/src/zmalloc.c	2026-03-04 17:43:45.718730072 +0200
-+++ b/src/zmalloc.c	2026-03-04 17:44:16.583735039 +0200
-@@ -80,11 +80,22 @@
+--- a/src/zmalloc.c
++++ b/src/zmalloc.c
+@@ -80,12 +80,22 @@
  #define free(ptr) tc_free(ptr)
  /* Explicitly override malloc/free etc when using jemalloc. */
  #elif defined(USE_JEMALLOC)
@@ -115,23 +109,22 @@ index 1234567..abcdef0 100644
 +#define free(ptr) free(ptr)
 +#define mallocx(size,flags) mallocx(size,flags)
 +#define dallocx(ptr,flags) dallocx(ptr,flags)
-+#define je_sdallocx(ptr,size,flags) sdallocx(ptr,size,flags)
 +#define je_mallctl mallctl
 +#else
  #define malloc(size) je_malloc(size)
  #define calloc(count, size) je_calloc(count, size)
  #define realloc(ptr, size) je_realloc(ptr, size)
  #define free(ptr) je_free(ptr)
- #endif
+ #define mallocx(size, flags) je_mallocx(size, flags)
+ #define dallocx(ptr, flags) je_dallocx(ptr, flags)
 +#endif
+ #endif
  
  #define thread_local _Thread_local
- 
-diff -ruN a/src/zmalloc.h b/src/zmalloc.h
-diff --git a/src/zmalloc.h	2026-03-04 17:43:45.718730072 +0200 b/src/zmalloc.h	2026-03-04 17:43:45.718730072 +0200
+diff --git a/src/zmalloc.h b/src/zmalloc.h
 index 1234567..abcdef0 100644
---- a/src/zmalloc.h	2026-03-04 17:43:45.718730072 +0200
-+++ b/src/zmalloc.h	2026-03-04 17:44:16.583735039 +0200
+--- a/src/zmalloc.h
++++ b/src/zmalloc.h
 @@ -53,7 +53,11 @@
  #include <jemalloc/jemalloc.h>
  #if (JEMALLOC_VERSION_MAJOR == 2 && JEMALLOC_VERSION_MINOR >= 1) || (JEMALLOC_VERSION_MAJOR > 2)
