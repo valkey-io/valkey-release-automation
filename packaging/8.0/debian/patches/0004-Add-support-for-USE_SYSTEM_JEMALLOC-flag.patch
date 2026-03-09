@@ -10,9 +10,9 @@ Updated for Valkey 8.0.x (hiredis, line numbers adjusted)
  src/debug.c   |  4 ++++
  src/object.c  |  5 +++++
  src/sds.c     |  4 ++++
- src/zmalloc.c | 10 ++++++++++
+ src/zmalloc.c | 11 +++++++++++
  src/zmalloc.h |  4 ++++
- 7 files changed, 34 insertions(+), 0 deletions(-)
+ 7 files changed, 35 insertions(+), 0 deletions(-)
 
 diff --git a/deps/Makefile b/deps/Makefile
 index 1234567..abcdef0 100644
@@ -98,7 +98,7 @@ diff --git a/src/zmalloc.c b/src/zmalloc.c
 index 1234567..abcdef0 100644
 --- a/src/zmalloc.c
 +++ b/src/zmalloc.c
-@@ -80,12 +80,22 @@
+@@ -80,12 +80,23 @@
  #define free(ptr) tc_free(ptr)
  /* Explicitly override malloc/free etc when using jemalloc. */
  #elif defined(USE_JEMALLOC)
@@ -109,6 +109,7 @@ index 1234567..abcdef0 100644
 +#define free(ptr) free(ptr)
 +#define mallocx(size,flags) mallocx(size,flags)
 +#define dallocx(ptr,flags) dallocx(ptr,flags)
++#define je_sdallocx(ptr,size,flags) sdallocx(ptr,size,flags)
 +#define je_mallctl mallctl
 +#else
  #define malloc(size) je_malloc(size)
