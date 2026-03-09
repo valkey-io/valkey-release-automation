@@ -14,10 +14,12 @@ S3_BUCKET="$4"
 S3_REGION="$5"
 
 MAJOR="${VERSION%%.*}"
-REPO_NAME="valkey-${MAJOR}"
+MINOR_PART="${VERSION#*.}"
+MINOR="${MINOR_PART%%.*}"
+REPO_NAME="valkey-${MAJOR}.${MINOR}"
 STAGING="staging"
 
-echo "Publishing to S3: version=${VERSION}, major=${MAJOR}, repo=${REPO_NAME}"
+echo "Publishing to S3: version=${VERSION}, major=${MAJOR}, minor=${MINOR}, repo=${REPO_NAME}"
 echo "  Bucket: ${S3_BUCKET}, Region: ${S3_REGION}"
 
 mkdir -p "${STAGING}"

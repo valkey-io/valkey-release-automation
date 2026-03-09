@@ -47,12 +47,12 @@
     PREFIX=%{buildroot}%{_prefix}
 
 Name:           valkey
-Version:        @@SPEC_VERSION@@
+Version:        7.2.12
 Release:        1.1%{?dist}
 Summary:        Persistent key-value database
 
 # valkey: BSD-3-Clause
-# @@BUNDLED_DEP_NAME@@: BSD-3-Clause
+# hiredis: BSD-3-Clause
 # hdrhistogram, linenoise: BSD-2-Clause
 # lua: MIT
 # fpconv: BSL-1.0
@@ -127,16 +127,13 @@ Requires(pre):  shadow-utils
 %endif
 
 # Bundled dependencies
-@@BUNDLED_DEP_PROVIDES@@
+Provides:       bundled(hiredis)
 Provides:       bundled(lua-libs) = 5.1.5
 Provides:       bundled(linenoise) = 1.0
 Provides:       bundled(hdr_histogram) = 0.11.8
 Provides:       bundled(fpconv)
 
 Provides:       valkey(modules_abi)%{?_isa} = %{valkey_modules_abi}
-
-# Upgrade from older major versions
-Obsoletes:      valkey < @@MAJOR_VERSION@@.@@MINOR@@
 
 ExcludeArch:    %{ix86}
 
@@ -168,7 +165,6 @@ You can use Valkey from most programming languages.
 %package        devel
 Summary:        Development header for Valkey module development
 Provides:       %{name}-static = %{version}-%{release}
-Obsoletes:      valkey-devel < @@MAJOR_VERSION@@.@@MINOR@@
 
 %description    devel
 Header file required for building loadable Valkey modules. Includes the 
@@ -178,7 +174,6 @@ valkeymodule.h API header and RPM macros for module packaging.
 Summary:        Conversion script and compatibility symlinks for Redis
 Requires:       %{name} >= %{version}
 Requires(post): /usr/bin/find
-Obsoletes:      valkey-compat-redis < @@MAJOR_VERSION@@.@@MINOR@@
 %if 0%{?fedora} > 40 || 0%{?rhel} > 9
 Obsoletes:      redis < 7.4
 Provides:       redis = %{version}-%{release}
@@ -194,7 +189,6 @@ that redirect to the equivalent valkey-* commands.
 %package        compat-redis-devel
 Summary:        Compatibility development header for Redis API Valkey modules
 Requires:       %{name}-devel >= %{version}
-Obsoletes:      valkey-compat-redis-devel < @@MAJOR_VERSION@@.@@MINOR@@
 %if 0%{?fedora} > 40 || 0%{?rhel} > 9
 Obsoletes:      redis-devel < 7.4
 Provides:       redis-devel = %{version}-%{release}
@@ -213,7 +207,6 @@ Redis API.
 %package        doc
 Summary:        Documentation and extra man pages for %{name}
 License:        CC-BY-SA-4.0
-Obsoletes:      valkey-doc < @@MAJOR_VERSION@@.@@MINOR@@
 %if 0%{?fedora} > 40 || 0%{?rhel} > 9
 Obsoletes:      redis-doc < 7.4
 Provides:       redis-doc = %{version}-%{release}
@@ -229,7 +222,7 @@ Documentation and additional man pages for Valkey.
 %patch -P1001 -p1
 
 mv deps/lua/COPYRIGHT             COPYRIGHT-lua
-mv deps/@@BUNDLED_DEP_DIR@@/COPYING         COPYING-@@BUNDLED_DEP_NAME@@-BSD-3-Clause
+mv deps/hiredis/COPYING           COPYING-hiredis-BSD-3-Clause
 mv deps/hdr_histogram/LICENSE.txt LICENSE-hdrhistogram
 mv deps/hdr_histogram/COPYING.txt COPYING-hdrhistogram
 mv deps/fpconv/LICENSE.txt        LICENSE-fpconv
@@ -423,7 +416,7 @@ EOF
 %license LICENSE-hdrhistogram
 %license COPYING-hdrhistogram
 %license LICENSE-fpconv
-%license COPYING-@@BUNDLED_DEP_NAME@@-BSD-3-Clause
+%license COPYING-hiredis-BSD-3-Clause
 %doc 00-RELEASENOTES README.md
 %if 0%{?is_suse}
 %doc README.SUSE
@@ -504,4 +497,5 @@ EOF
 %endif
 
 %changelog
-@@CHANGELOG@@
+* Wed Mar 04 2026 Evgeniy Patlan <evgeniy.patlan@percona.com> - 7.2.12-1.1
+- Package Valkey 7.2.12 for 7.2.x release line

@@ -35,14 +35,9 @@ Depends:
  lsb-base (>= 3.2-14),
  ${misc:Depends},
  ${shlibs:Depends}
-Replaces:
- valkey-server (<< @@MAJOR_VERSION@@.@@MINOR@@~)
-Breaks:
- valkey-server (<< @@MAJOR_VERSION@@.@@MINOR@@~)
 Recommends:
  logrotate
 Suggests:
- valkey-doc,
  valkey-compat-redis
 Description: Persistent key-value database with network interface
  Valkey is an advanced key-value store. It is often referred to as a data
@@ -76,10 +71,6 @@ Depends:
  lsb-base (>= 3.2-14),
  ${misc:Depends},
  ${shlibs:Depends}
-Replaces:
- valkey-sentinel (<< @@MAJOR_VERSION@@.@@MINOR@@~)
-Breaks:
- valkey-sentinel (<< @@MAJOR_VERSION@@.@@MINOR@@~)
 Recommends:
  logrotate
 Description: Persistent key-value database with network interface (monitoring)
@@ -93,10 +84,6 @@ Depends:
  adduser,
  ${misc:Depends},
  ${shlibs:Depends}
-Replaces:
- valkey-tools (<< @@MAJOR_VERSION@@.@@MINOR@@~)
-Breaks:
- valkey-tools (<< @@MAJOR_VERSION@@.@@MINOR@@~)
 Suggests:
  ruby-redis
 Description: Persistent key-value database with network interface (client)
@@ -110,10 +97,6 @@ Architecture: any
 Multi-Arch: same
 Depends:
  ${misc:Depends}
-Replaces:
- valkey-dev (<< @@MAJOR_VERSION@@.@@MINOR@@~)
-Breaks:
- valkey-dev (<< @@MAJOR_VERSION@@.@@MINOR@@~)
 Description: Development files for Valkey modules
  Valkey is an advanced key-value store.
  .
@@ -126,18 +109,15 @@ Depends:
  valkey-server (>= ${source:Version}),
  valkey-tools (>= ${source:Version}),
  ${misc:Depends}
-Replaces:
- valkey-compat-redis (<< @@MAJOR_VERSION@@.@@MINOR@@~),
- redis-server (<< 7.4~),
- redis-tools (<< 7.4~)
-Breaks:
- valkey-compat-redis (<< @@MAJOR_VERSION@@.@@MINOR@@~)
 Conflicts:
  redis-server (<< 7.4~),
  redis-tools (<< 7.4~)
 Provides:
  redis-server,
  redis-tools
+Replaces:
+ redis-server (<< 7.4~),
+ redis-tools (<< 7.4~)
 Description: Redis compatibility symlinks for Valkey
  This package provides compatibility symlinks and wrappers to enable
  easy conversion from Redis to Valkey. It provides redis-* command names
@@ -152,33 +132,14 @@ Multi-Arch: foreign
 Depends:
  valkey-dev (>= ${source:Version}),
  ${misc:Depends}
-Replaces:
- valkey-compat-redis-dev (<< @@MAJOR_VERSION@@.@@MINOR@@~),
- redis-dev (<< 7.4~)
-Breaks:
- valkey-compat-redis-dev (<< @@MAJOR_VERSION@@.@@MINOR@@~)
 Conflicts:
  redis-dev (<< 7.4~)
 Provides:
  redis-dev
+Replaces:
+ redis-dev (<< 7.4~)
 Description: Redis API compatibility headers for Valkey modules
  This package provides the legacy redismodule.h header for building
  Valkey modules with the Redis API.
  .
  This is a transitional package to help migrate Redis modules to Valkey.
-
-Package: valkey-doc
-Section: doc
-Architecture: all
-Multi-Arch: foreign
-Depends:
- ${misc:Depends}
-Replaces:
- valkey-doc (<< @@MAJOR_VERSION@@.@@MINOR@@~)
-Breaks:
- valkey-doc (<< @@MAJOR_VERSION@@.@@MINOR@@~)
-Build-Profiles: <!nodoc>
-Description: Documentation for Valkey
- Valkey is an advanced key-value store.
- .
- This package contains the documentation and additional man pages.

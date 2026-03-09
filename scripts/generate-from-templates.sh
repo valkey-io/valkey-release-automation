@@ -45,7 +45,8 @@ echo "Generating ${TYPE} files for Valkey ${VERSION} (major=${MAJOR_VERSION}, do
 if [ "$TYPE" = "deb" ]; then
   # Process control template
   if [ -f "${TEMPLATES_DIR}/control.template" ]; then
-    sed "s/@@MAJOR_VERSION@@/${MAJOR_VERSION}/g" \
+    sed -e "s/@@MAJOR_VERSION@@/${MAJOR_VERSION}/g" \
+        -e "s/@@MINOR@@/${MINOR}/g" \
       "${TEMPLATES_DIR}/control.template" > "${OUTPUT_DIR}/control"
     echo "  Generated: control"
   fi
@@ -75,7 +76,7 @@ elif [ "$TYPE" = "rpm" ]; then
   SPEC_VERSION="${VERSION}"
 
   # Load changelog
-  CHANGELOG_FILE="${TEMPLATES_DIR}/changelog-${MAJOR_VERSION}.x"
+  CHANGELOG_FILE="${TEMPLATES_DIR}/changelog-${MAJOR_VERSION}.${MINOR}"
   if [ -f "$CHANGELOG_FILE" ]; then
     CHANGELOG=$(cat "$CHANGELOG_FILE")
   else
@@ -90,6 +91,7 @@ elif [ "$TYPE" = "rpm" ]; then
 
     sed \
       -e "s/@@MAJOR_VERSION@@/${MAJOR_VERSION}/g" \
+      -e "s/@@MINOR@@/${MINOR}/g" \
       -e "s/@@SPEC_VERSION@@/${SPEC_VERSION}/g" \
       -e "s/@@BUNDLED_DEP_NAME@@/${BUNDLED_DEP_NAME}/g" \
       -e "s|@@BUNDLED_DEP_PROVIDES@@|${BUNDLED_DEP_PROVIDES}|g" \

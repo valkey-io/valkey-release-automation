@@ -14,8 +14,10 @@ SITE_DIR="$7"
 TEMPLATE_DIR="$8"
 
 MAJOR="${VERSION%%.*}"
+MINOR_PART="${VERSION#*.}"
+MINOR="${MINOR_PART%%.*}"
 
-echo "Generating site: version=${VERSION}, major=${MAJOR}"
+echo "Generating site: version=${VERSION}, major=${MAJOR}, minor=${MINOR}"
 echo "  Repo URL (S3):       ${REPO_URL}"
 echo "  Pages URL (GH Pages): ${PAGES_URL}"
 
@@ -38,11 +40,12 @@ for vdir in $S3_DIRS; do
 done
 
 # Always include current version
-if ! echo ",${AVAILABLE_VERSIONS}," | grep -q ",${MAJOR},"; then
+CURRENT_VER="${MAJOR}.${MINOR}"
+if ! echo ",${AVAILABLE_VERSIONS}," | grep -q ",${CURRENT_VER},"; then
   if [ -n "$AVAILABLE_VERSIONS" ]; then
-    AVAILABLE_VERSIONS="${AVAILABLE_VERSIONS},${MAJOR}"
+    AVAILABLE_VERSIONS="${AVAILABLE_VERSIONS},${CURRENT_VER}"
   else
-    AVAILABLE_VERSIONS="${MAJOR}"
+    AVAILABLE_VERSIONS="${CURRENT_VER}"
   fi
 fi
 echo "Detected versions: ${AVAILABLE_VERSIONS}"

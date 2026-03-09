@@ -30,10 +30,12 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           MAJOR="${VERSION%%.*}"
+          MINOR_PART="${VERSION#*.}"
+          MINOR="${MINOR_PART%%.*}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "packaging_dir=${MAJOR}.x" >> "$GITHUB_OUTPUT"
+          echo "packaging_dir=${MAJOR}.${MINOR}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}"
-          echo "Packaging directory: ${MAJOR}.x"
+          echo "Packaging directory: ${MAJOR}.${MINOR}"
 
   ############################################################################
   # RPM Builds

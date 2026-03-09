@@ -10,7 +10,7 @@ Comprehensive documentation for the Valkey release automation and packaging infr
 - [RPM Packaging](#rpm-packaging)
 - [DEB Packaging](#deb-packaging)
 - [Version Management](#version-management)
-  - [Template System (8.x/9.x)](#template-system-8x9x)
+  - [Template System (8.1/9.0+)](#template-system-8190)
 - [Cross-Version Upgrade Relationships](#cross-version-upgrade-relationships)
 - [Patch System](#patch-system)
 - [Documentation Handling](#documentation-handling)
@@ -45,7 +45,7 @@ valkey-release-automation/
 ├── scripts/
 │   ├── build-rpm.sh                         # RPM build script (runs in Docker)
 │   ├── build-deb.sh                         # DEB build script (runs in Docker)
-│   ├── generate-from-templates.sh           # Template processor (8.x/9.x+)
+│   ├── generate-from-templates.sh           # Template processor (8.1/9.0+)
 │   ├── publish-to-s3.sh                     # Sign packages + build repos, upload to S3
 │   ├── publish-repos.sh                     # Generate GH Pages site (install instructions)
 │   ├── setup-github-pages.sh                # One-time GPG + GH Pages + S3 setup
@@ -67,15 +67,15 @@ valkey-release-automation/
     │       ├── valkey-server.manpages
     │       ├── valkey-tools.manpages
     │       └── ...
-    ├── templates/                           # Templates for 8.x/9.x+ (see below)
+    ├── templates/                           # Templates for 8.1/9.0+ (see below)
     │   ├── debian/
     │   │   ├── control.template             # @@MAJOR_VERSION@@ placeholder
     │   │   └── rules.template               # @@DOC_VERSION@@ placeholder
     │   └── rpm/
     │       ├── valkey.spec.template          # Multiple placeholders
-    │       ├── changelog-8.x                # RPM changelog for 8.x
-    │       └── changelog-9.x                # RPM changelog for 9.x
-    ├── 7.x/                                 # Valkey 7.2.x packaging (no templates)
+    │       ├── changelog-8.1                # RPM changelog for 8.1
+    │       └── changelog-9.0                # RPM changelog for 9.0
+    ├── 7.2/                                 # Valkey 7.2.x packaging (no templates)
     │   ├── rpm/
     │   │   ├── valkey.spec
     │   │   └── valkey-conf.patch
@@ -83,13 +83,13 @@ valkey-release-automation/
     │       ├── control, rules, changelog
     │       ├── patches/
     │       └── ...
-    ├── 8.x/                                 # Valkey 8.x overrides only
+    ├── 8.1/                                 # Valkey 8.1.x overrides only
     │   ├── rpm/
     │   │   └── valkey-conf.patch            # (spec generated from template)
     │   └── debian/
     │       ├── changelog                    # (control/rules generated from template)
     │       └── patches/
-    └── 9.x/                                 # Valkey 9.x overrides only
+    └── 9.0/                                 # Valkey 9.0.x overrides only
         ├── rpm/
         │   └── valkey-conf.patch            # (spec generated from template)
         └── debian/
@@ -184,17 +184,17 @@ process-inputs ──► validate version, detect bundle eligibility (>= 8.1.0)
 ```
 packages.yml
        │
-       ├──► process-inputs ──► derive packaging_dir (e.g., 9.x)
+       ├──► process-inputs ──► derive packaging_dir (e.g., 9.0)
        │
        ├──► build-rpm (15 platforms × 2 arches)
-       │       ├── merge common/ + N.x/ packaging
-       │       ├── generate spec from template (8.x/9.x)
+       │       ├── merge common/ + N.M/ packaging
+       │       ├── generate spec from template (8.1/9.0+)
        │       ├── build RPMs in Docker
        │       └── upload artifacts
        │
        ├──► build-deb (5 platforms × 2 arches)
-       │       ├── merge common/ + N.x/ packaging
-       │       ├── generate control/rules from template (8.x/9.x)
+       │       ├── merge common/ + N.M/ packaging
+       │       ├── generate control/rules from template (8.1/9.0+)
        │       ├── build DEBs in Docker
        │       └── upload artifacts
        │
@@ -221,26 +221,27 @@ The primary workflow for building distribution packages. Accepts a single `versi
 
 ### Process Inputs Job
 
-Derives the packaging directory from the version's **major** number. All minor/patch versions within the same major share a single packaging directory:
+Derives the packaging directory from the version's **major.minor** number. Each major.minor version has its own packaging directory:
 
 ```
 Input version    Packaging dir     Doc version    Notes
 ─────────────    ──────────────    ───────────    ─────
-7.2.12       →   packaging/7.x/    7.2.0          No templates (files maintained directly)
-8.0.2        →   packaging/8.x/    8.0.0          Templates with hiredis bundled dep
-8.1.6        →   packaging/8.x/    8.1.0          Templates with hiredis bundled dep
-9.0.3        →   packaging/9.x/    9.0.0          Templates with libvalkey bundled dep
-9.1.0        →   packaging/9.x/    9.1.0          Templates with libvalkey bundled dep
-10.0.1       →   packaging/10.x/   10.0.0         Templates with libvalkey bundled dep (*)
+7.2.12       →   packaging/7.2/    7.2.0          No templates (files maintained directly)
+8.1.6        →   packaging/8.1/    8.1.0          Templates with hiredis bundled dep
+9.0.3        →   packaging/9.0/    9.0.0          Templates with libvalkey bundled dep
+9.1.0        →   packaging/9.1/    9.1.0          Templates with libvalkey bundled dep (*)
+10.0.1       →   packaging/10.0/   10.0.0         Templates with libvalkey bundled dep (*)
 ```
 
-All minor/patch versions within the same major share a single packaging directory. The minor version only affects `DOC_VERSION` (derived as `MAJOR.MINOR.0`). For example, `8.0.x` and `8.1.x` both use `packaging/8.x/`; `9.0.x` and `9.1.x` both use `packaging/9.x/`.
+Each major.minor version has its own packaging directory and S3 repository. For example, `9.0.x` uses `packaging/9.0/` and publishes to `valkey-9.0/`, while `9.1.x` uses `packaging/9.1/` and publishes to `valkey-9.1/`.
 
-> (*) **10.x requires setup:** create `packaging/10.x/` with version-specific files and `packaging/templates/rpm/changelog-10.x`. See [Adding a new major version](#template-system-8x9x) for details.
+> (*) **New versions require setup:** create `packaging/N.M/` with version-specific files and `packaging/templates/rpm/changelog-N.M`. See [Adding a new version](#template-system-8190) for details.
 
 ```yaml
 MAJOR="${VERSION%%.*}"
-packaging_dir="${MAJOR}.x"
+MINOR_PART="${VERSION#*.}"
+MINOR="${MINOR_PART%%.*}"
+packaging_dir="${MAJOR}.${MINOR}"
 ```
 
 ### Build Pipeline Diagram
@@ -251,7 +252,7 @@ packaging_dir="${MAJOR}.x"
 ├───────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌──────────────┐                                                 │
-│  │process-inputs│  version=9.0.3 → packaging_dir=9.x             │
+│  │process-inputs│  version=9.0.3 → packaging_dir=9.0             │
 │  └──────┬───────┘                                                 │
 │         │                                                         │
 │    ┌────┴────┐                                                    │
@@ -265,8 +266,8 @@ packaging_dir="${MAJOR}.x"
 │    │  ┌─────┴──────────────────────────────────────┐              │
 │    │  │  For each (platform × arch):               │              │
 │    │  │  1. Launch Docker container                │              │
-│    │  │  2. Merge common/ + X.x/ packaging files   │              │
-│    │  │  3. Generate files from templates (8.x/9.x)│              │
+│    │  │  2. Merge common/ + N.M/ packaging files    │              │
+│    │  │  3. Generate files from templates (8.1/9.0+)│              │
 │    │  │  4. Override version via sed               │              │
 │    │  │  5. Download source tarball                │              │
 │    │  │  6. Build (rpmbuild / dpkg-buildpackage)   │              │
@@ -287,9 +288,9 @@ packaging_dir="${MAJOR}.x"
 
 ### Spec File Structure
 
-For **7.x**, the spec file lives at `packaging/7.x/rpm/valkey.spec` (maintained manually).
+For **7.2**, the spec file lives at `packaging/7.2/rpm/valkey.spec` (maintained manually).
 
-For **8.x and 9.x**, the spec file is **generated from a template** at build time by `scripts/generate-from-templates.sh` using `packaging/templates/rpm/valkey.spec.template`. This avoids maintaining near-identical spec files across major versions.
+For **8.1, 9.0, and later**, the spec file is **generated from a template** at build time by `scripts/generate-from-templates.sh` using `packaging/templates/rpm/valkey.spec.template`. This avoids maintaining near-identical spec files across versions.
 
 ```
 valkey.spec.template structure:
@@ -311,19 +312,20 @@ valkey.spec.template structure:
 ├── %install             (binaries, configs, systemd units, symlinks)
 ├── %pre / %post         (user creation, systemd integration)
 ├── %files               (per-package file lists)
-└── %changelog           (@@CHANGELOG@@ → from changelog-N.x file)
+└── %changelog           (@@CHANGELOG@@ → from changelog-N.M file)
 ```
 
 **Template placeholders:**
 
-| Placeholder | 8.x Value | 9.x / 10.x Value |
+| Placeholder | 8.1 Value | 9.0 / 10.0 Value |
 |-------------|-----------|-------------------|
 | `@@MAJOR_VERSION@@` | `8` | `9` / `10` |
+| `@@MINOR@@` | `1` | `0` / `0` |
 | `@@SPEC_VERSION@@` | `8.1.6` (from input) | `9.0.3` / `10.0.1` (from input) |
 | `@@BUNDLED_DEP_NAME@@` | `hiredis` | `libvalkey` |
 | `@@BUNDLED_DEP_PROVIDES@@` | `Provides: bundled(hiredis)` | `Provides: bundled(libvalkey) = 1.0.0` |
 | `@@BUNDLED_DEP_DIR@@` | `hiredis` | `libvalkey` |
-| `@@CHANGELOG@@` | Contents of `changelog-8.x` | Contents of `changelog-9.x` / `changelog-10.x` |
+| `@@CHANGELOG@@` | Contents of `changelog-8.1` | Contents of `changelog-9.0` / `changelog-10.0` |
 
 > **Note:** The bundled dependency switches from `hiredis` to `libvalkey` at major version 9. All versions >= 9 (including future 10.x, 11.x, etc.) use `libvalkey` unless the logic in `generate-from-templates.sh` is updated.
 
@@ -339,14 +341,14 @@ valkey.spec.template structure:
 │                                                          │
 │  2. Install build tools (rpm-build, gcc, make, etc.)     │
 │                                                          │
-│  3. Merge common/ + X.x/ packaging files into /packaging │
+│  3. Merge common/ + N.M/ packaging files into /packaging │
 │                                                          │
-│  4. ┌─ Generate spec from template (8.x/9.x) ───────┐   │
+│  4. ┌─ Generate spec from template (8.1/9.0+) ──────┐   │
 │     │ generate-from-templates.sh --type rpm            │   │
 │     │   Substitutes: @@MAJOR_VERSION@@,                │   │
 │     │   @@BUNDLED_DEP_NAME/PROVIDES/DIR@@,             │   │
-│     │   @@CHANGELOG@@ from changelog-N.x              │   │
-│     │ (7.x: uses spec directly, no template)           │   │
+│     │   @@CHANGELOG@@ from changelog-N.M              │   │
+│     │ (7.2: uses spec directly, no template)           │   │
 │     └────────────────────────────────────────────────┘   │
 │                                                          │
 │  5. Copy spec + supporting files to ~/rpmbuild/SPECS/    │
@@ -463,7 +465,7 @@ The spec file adapts to different platforms using RPM conditionals:
 
 ### Debian Directory Structure
 
-For **8.x/9.x**, `control` and `rules` are **generated from templates** at build time. The version-specific directories only contain files that truly differ per version (changelog, patches, conf patch). Files identical across 8.x/9.x (manpages, install lists) live in `packaging/common/debian/`.
+For **8.1, 9.0, and later**, `control` and `rules` are **generated from templates** at build time. The version-specific directories only contain files that truly differ per version (changelog, patches, conf patch). Files identical across versions (manpages, install lists) live in `packaging/common/debian/`.
 
 ```
 packaging/common/debian/         # Shared across all versions
@@ -476,11 +478,11 @@ packaging/common/debian/         # Shared across all versions
 │   └── generate-systemd-service-files
 ├── ...                          # Other shared files
 
-packaging/templates/debian/      # Templates for 8.x/9.x+
+packaging/templates/debian/      # Templates for 8.1/9.0+
 ├── control.template             # @@MAJOR_VERSION@@ → Replaces/Breaks
 └── rules.template               # @@DOC_VERSION@@ → VALKEY_DOC_VERSION
 
-packaging/X.x/debian/            # Version-specific overrides only
+packaging/N.M/debian/            # Version-specific overrides only
 ├── changelog                    # Package changelog (version-specific)
 ├── patches/                     # Patches (differ per version)
 │   ├── series
@@ -492,16 +494,17 @@ packaging/X.x/debian/            # Version-specific overrides only
 │   └── 0004-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch
 └── valkey-conf.patch            # (if present)
 
-Note: 7.x retains the traditional layout with control, rules, and all
-files directly in packaging/7.x/debian/ (no templates used).
+Note: 7.2 retains the traditional layout with control, rules, and all
+files directly in packaging/7.2/debian/ (no templates used).
 ```
 
 **Template placeholders (DEB):**
 
-| Placeholder | Example 8.x | Example 9.x |
+| Placeholder | Example 8.1 | Example 9.1 |
 |-------------|-------------|-------------|
-| `@@MAJOR_VERSION@@` (control) | `8` → `Breaks: valkey-server (<< 8.0~)` | `9` → `Breaks: valkey-server (<< 9.0~)` |
-| `@@DOC_VERSION@@` (rules) | `8.1.0` | `9.0.0` |
+| `@@MAJOR_VERSION@@` (control) | `8` | `9` |
+| `@@MINOR@@` (control) | `1` → `Breaks: valkey-server (<< 8.1~)` | `1` → `Breaks: valkey-server (<< 9.1~)` |
+| `@@DOC_VERSION@@` (rules) | `8.1.0` | `9.1.0` |
 
 ### DEB Build Process
 
@@ -513,13 +516,13 @@ files directly in packaging/7.x/debian/ (no templates used).
 │  1. Launch platform Docker container                     │
 │     (e.g., debian:bookworm, ubuntu:noble)                │
 │                                                          │
-│  2. Merge common/ + X.x/ packaging files into /packaging │
+│  2. Merge common/ + N.M/ packaging files into /packaging │
 │                                                          │
-│  3. ┌─ Generate control/rules from template (8.x/9.x)─┐ │
+│  3. ┌─ Generate control/rules from template (8.1/9.0+)─┐ │
 │     │ generate-from-templates.sh --type deb             │ │
 │     │   control: @@MAJOR_VERSION@@ → 9                  │ │
 │     │   rules:   @@DOC_VERSION@@ → 9.0.0               │ │
-│     │ (7.x: uses files directly, no template)           │ │
+│     │ (7.2: uses files directly, no template)           │ │
 │     └────────────────────────────────────────────────┘   │
 │                                                          │
 │  4. Extract source tarball, copy debian/ directory into   │
@@ -587,7 +590,7 @@ Set in `debian/rules`:
 │                         │ Provides: redis-dev                      │
 ├─────────────────────────┼──────────────────────────────────────────┤
 │ valkey-doc              │ Man pages + HTML documentation           │
-│                         │ (not available for 7.x)                  │
+│                         │ (not available for 7.2)                  │
 └─────────────────────────┴──────────────────────────────────────────┘
 ```
 
@@ -610,7 +613,7 @@ The `debian/rules` file overrides several `dh_*` targets:
 
 Version management uses a two-layer approach:
 
-1. **Template generation** (8.x/9.x): `generate-from-templates.sh` creates version-specific `control`, `rules`, and `valkey.spec` from templates, substituting major-version-dependent values (Obsoletes thresholds, bundled dependency names, changelogs).
+1. **Template generation** (8.1/9.0+): `generate-from-templates.sh` creates version-specific `control`, `rules`, and `valkey.spec` from templates, substituting major-version-dependent values (Obsoletes thresholds, bundled dependency names, changelogs).
 
 2. **Sed overrides** (all versions): Build scripts dynamically set the exact patch version via `sed` at build time.
 
@@ -632,7 +635,7 @@ Input: version = 9.0.3
      spec.template → valkey.spec      control.template → control
      @@MAJOR_VERSION@@ = 9            @@MAJOR_VERSION@@ = 9
      @@BUNDLED_DEP_*@@ = libvalkey    rules.template → rules
-     @@CHANGELOG@@ = changelog-9.x   @@DOC_VERSION@@ = 9.0.0
+     @@CHANGELOG@@ = changelog-9.0   @@DOC_VERSION@@ = 9.0.0
                   │                         │
   2. sed on valkey.spec:           2. sed on debian/rules:
      Version: 9.0.3                   VALKEY_DOC_VERSION = 9.0.0
@@ -641,7 +644,7 @@ Input: version = 9.0.3
                                       (updates debian/changelog)
 ```
 
-> **Note:** For 7.x, templates are not used; the spec/control/rules files are maintained directly in `packaging/7.x/`.
+> **Note:** For 7.2, templates are not used; the spec/control/rules files are maintained directly in `packaging/7.2/`.
 
 ### Doc Version Derivation
 
@@ -666,40 +669,37 @@ DOC_VERSION=$(echo "${VERSION}" | sed "s/\.[0-9]*$/.0/")
 ### Packaging Directory Selection
 
 ```
-version=10.0.1 →  MAJOR=10 →  packaging/10.x/  (requires setup — see below)
-version=9.1.0  →  MAJOR=9  →  packaging/9.x/   (same dir as 9.0.x)
-version=9.0.3  →  MAJOR=9  →  packaging/9.x/
-version=8.1.6  →  MAJOR=8  →  packaging/8.x/
-version=8.0.2  →  MAJOR=8  →  packaging/8.x/   (same dir as 8.1.x)
-version=7.2.12 →  MAJOR=7  →  packaging/7.x/
+version=10.0.1 →  MAJOR=10, MINOR=0  →  packaging/10.0/  (requires setup — see below)
+version=9.1.0  →  MAJOR=9,  MINOR=1  →  packaging/9.1/   (requires setup — see below)
+version=9.0.3  →  MAJOR=9,  MINOR=0  →  packaging/9.0/
+version=8.1.6  →  MAJOR=8,  MINOR=1  →  packaging/8.1/
+version=7.2.12 →  MAJOR=7,  MINOR=2  →  packaging/7.2/
 ```
 
-### Template System (8.x/9.x)
+### Template System (8.1/9.0+)
 
-The `packaging/templates/` directory contains parameterized versions of files that differ only in version-dependent values between 8.x and 9.x. This eliminates near-duplicate maintenance.
+The `packaging/templates/` directory contains parameterized versions of files that differ only in version-dependent values between versions. This eliminates near-duplicate maintenance.
 
 **When to update templates vs version-specific files:**
 
 | Change needed | Where to edit |
 |---------------|---------------|
 | New Obsoletes threshold, Replaces/Breaks version | `templates/debian/control.template` or `templates/rpm/valkey.spec.template` |
-| New RPM changelog entry | `templates/rpm/changelog-N.x` |
+| New RPM changelog entry | `templates/rpm/changelog-N.M` |
 | New patch for a specific version | `packaging/N.x/rpm/valkey-conf.patch` or `packaging/N.x/debian/patches/` |
-| New DEB changelog entry | `packaging/N.x/debian/changelog` |
+| New DEB changelog entry | `packaging/N.M/debian/changelog` |
 | Change to bundled dep logic | `scripts/generate-from-templates.sh` |
 
-**Adding a new major version (e.g., 10.x):**
+**Adding a new version (e.g., 9.1 or 10.0):**
 
-1. Create `packaging/10.x/rpm/` with:
+1. Create `packaging/N.M/rpm/` with:
    - `valkey-conf.patch` — regenerated against the new source tree
-2. Create `packaging/10.x/debian/` with:
+2. Create `packaging/N.M/debian/` with:
    - `changelog` — initial DEB changelog entry
    - `patches/` — regenerated DEB patches against the new source tree
-3. Create `packaging/templates/rpm/changelog-10.x` with the initial RPM changelog entry
+3. Create `packaging/templates/rpm/changelog-N.M` with the initial RPM changelog entry
 4. If the bundled dependency changes (e.g., libvalkey → something new), update the logic in `generate-from-templates.sh`
 5. The template system handles `control`, `rules`, and `valkey.spec` automatically — no need to create these files
-
-**Adding a new minor version (e.g., 9.1.x):** No action needed. The `9.1.x` version uses the existing `packaging/9.x/` directory and templates. Only `DOC_VERSION` changes (to `9.1.0`), which is derived automatically from the version input.
 
 **The generate script** (`scripts/generate-from-templates.sh`) accepts:
 ```
@@ -719,7 +719,7 @@ Packages declare upgrade relationships so newer major versions cleanly replace o
 ```
     ┌───────────┐      ┌───────────┐      ┌───────────┐      ┌───────────┐
     │  Valkey    │      │  Valkey    │      │  Valkey    │      │  Valkey    │
-    │  7.x      │─────►│  8.x      │─────►│  9.x      │─────►│  10.x     │
+    │  7.2      │─────►│  8.1      │─────►│  9.0      │─────►│  10.0     │
     │           │      │           │      │           │      │           │
     │ (base)    │      │ Obsoletes │      │ Obsoletes │      │ Obsoletes │
     │           │      │ valkey<8.0│      │ valkey<9.0│      │valkey<10.0│
@@ -735,10 +735,10 @@ Uses `Obsoletes:` to indicate that this package supersedes older versions:
 
 | Version | Directive | Effect |
 |---------|-----------|--------|
-| 7.x | *(none)* | Base version, no predecessors |
-| 8.x | `Obsoletes: valkey < 8.0` | Replaces 7.x on upgrade |
-| 9.x | `Obsoletes: valkey < 9.0` | Replaces 7.x and 8.x on upgrade |
-| 10.x | `Obsoletes: valkey < 10.0` | Replaces 7.x, 8.x, and 9.x on upgrade |
+| 7.2 | *(none)* | Base version, no predecessors |
+| 8.1 | `Obsoletes: valkey < 8.1` | Replaces 7.2 and 8.0 on upgrade |
+| 9.0 | `Obsoletes: valkey < 9.0` | Replaces all earlier versions on upgrade |
+| 9.1 | `Obsoletes: valkey < 9.1` | Replaces 9.0 and all earlier versions on upgrade |
 
 Applied to all subpackages: `valkey`, `valkey-devel`, `valkey-compat-redis`, `valkey-compat-redis-devel`, `valkey-doc`.
 
@@ -748,13 +748,13 @@ Uses `Replaces:` + `Breaks:` pair (the Debian standard for upgrade replacement):
 
 | Version | Directives | Effect |
 |---------|------------|--------|
-| 7.x | *(none)* | Base version |
-| 8.x | `Replaces: valkey-server (<< 8.0~)` | Can overwrite 7.x files |
-|     | `Breaks: valkey-server (<< 8.0~)` | Forces removal of 7.x |
-| 9.x | `Replaces: valkey-server (<< 9.0~)` | Can overwrite 7.x/8.x files |
-|     | `Breaks: valkey-server (<< 9.0~)` | Forces removal of 7.x/8.x |
-| 10.x | `Replaces: valkey-server (<< 10.0~)` | Can overwrite 7.x/8.x/9.x files |
-|      | `Breaks: valkey-server (<< 10.0~)` | Forces removal of 7.x/8.x/9.x |
+| 7.2 | *(none)* | Base version |
+| 8.1 | `Replaces: valkey-server (<< 8.1~)` | Can overwrite 7.2/8.0 files |
+|     | `Breaks: valkey-server (<< 8.1~)` | Forces removal of 7.2/8.0 |
+| 9.0 | `Replaces: valkey-server (<< 9.0~)` | Can overwrite all earlier files |
+|     | `Breaks: valkey-server (<< 9.0~)` | Forces removal of all earlier |
+| 9.1 | `Replaces: valkey-server (<< 9.1~)` | Can overwrite 9.0 and earlier files |
+|     | `Breaks: valkey-server (<< 9.1~)` | Forces removal of 9.0 and earlier |
 
 Applied to all binary packages: `valkey-server`, `valkey-sentinel`, `valkey-tools`, `valkey-dev`, `valkey-compat-redis`, `valkey-compat-redis-dev`, `valkey-doc`.
 
@@ -833,7 +833,7 @@ Patches differ across version branches because the source code differs:
 
 ```
 ┌──────────────────┬────────────────┬────────────────┬────────────────┐
-│ Difference       │ 7.x            │ 8.x            │ 9.x            │
+│ Difference       │ 7.2            │ 8.1            │ 9.0            │
 ├──────────────────┼────────────────┼────────────────┼────────────────┤
 │ CC variable      │ REDIS_CC       │ SERVER_CC      │ SERVER_CC -I.  │
 │ LD variable      │ REDIS_LD       │ SERVER_LD      │ SERVER_LD      │
@@ -842,7 +842,7 @@ Patches differ across version branches because the source code differs:
 │ dir ./ line      │ 507            │ ~631           │ ~706           │
 │ debug.c params   │ (eip, uplevel) │ (eip, uplevel, │ (eip, uplevel, │
 │                  │                │  process_id)   │  process_id)   │
-│ valkey-doc avail │ No (none)      │ Yes (8.x.0+)  │ Yes (9.x.0+)  │
+│ valkey-doc avail │ No (none)      │ Yes (8.1.0+)  │ Yes (9.0.0+)  │
 │ fast_float       │ No             │ No             │ Yes            │
 └──────────────────┴────────────────┴────────────────┴────────────────┘
 ```
@@ -859,14 +859,14 @@ Patches differ across version branches because the source code differs:
 ┌─────────┬──────────────┬─────────────────────────────────────┐
 │ Version │ Doc Available │ Notes                               │
 ├─────────┼──────────────┼─────────────────────────────────────┤
-│ 7.x     │ No           │ No valkey-doc release exists for 7.x│
+│ 7.2     │ No           │ No valkey-doc release exists for 7.2│
 │         │              │ (earliest tag is 8.0.0). Build      │
 │         │              │ skips docs gracefully. No valkey-doc │
 │         │              │ DEB package produced.                │
 ├─────────┼──────────────┼─────────────────────────────────────┤
-│ 8.x     │ Yes          │ Downloads valkey-doc-8.x.0.tar.gz   │
+│ 8.1     │ Yes          │ Downloads valkey-doc-8.1.0.tar.gz   │
 ├─────────┼──────────────┼─────────────────────────────────────┤
-│ 9.x     │ Yes          │ Downloads valkey-doc-9.x.0.tar.gz   │
+│ 9.0     │ Yes          │ Downloads valkey-doc-9.0.0.tar.gz   │
 └─────────┴──────────────┴─────────────────────────────────────┘
 ```
 
@@ -883,7 +883,7 @@ Workflow:   --without docs passed when pandoc unavailable
 
 ```
 Build profile "nodoc"  →  skips doc download + build
-Default (no profile)   →  attempts download; 7.x handles failure gracefully
+Default (no profile)   →  attempts download; 7.2 handles failure gracefully
 ```
 
 ---
@@ -937,7 +937,7 @@ Signed packages are hosted on **AWS S3** (public read), while install instructio
     ┌─────────────┐             ┌──────────────┐
     │  S3 Bucket  │             │ GitHub Pages │
     │             │             │              │
-    │ valkey-9/   │             │ index.html   │
+    │ valkey-9.0/ │             │ index.html   │
     │  rpm/el9/   │             │ GPG-KEY.asc  │
     │  deb/...    │             └──────────────┘
     │ GPG-KEY.asc │
@@ -1017,8 +1017,8 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 |-------|---------------|-------------|
 | `scripts/` | `/scripts:ro` | Build scripts |
 | `packaging/common/rpm/` | `/packaging-common:ro` | Shared RPM sources |
-| `packaging/N.x/rpm/` | `/packaging-override:ro` | Version-specific overrides |
-| `packaging/templates/rpm/` | `/packaging-templates:ro` | Templates (8.x/9.x+) |
+| `packaging/N.M/rpm/` | `/packaging-override:ro` | Version-specific overrides |
+| `packaging/templates/rpm/` | `/packaging-templates:ro` | Templates (8.1/9.0+) |
 | `output/` | `/output` | Built RPMs written here |
 
 **Execution flow:**
@@ -1027,7 +1027,7 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 1. Install build tools (rpm-build, gcc, make, jemalloc-devel, openssl-devel, etc.)
    └── SUSE: zypper    RHEL/Fedora: dnf/yum
 2. Merge packaging layers: common/ → override/ → templates
-3. Generate spec from template (8.x/9.x, via generate-from-templates.sh)
+3. Generate spec from template (8.1/9.0+, via generate-from-templates.sh)
 4. Copy spec + source files to ~/rpmbuild/{SPECS,SOURCES}/
 5. Override Version: and %global doc_version via sed
 6. Download valkey-${VERSION}.tar.gz and valkey-doc-${DOC_VERSION}.tar.gz
@@ -1059,8 +1059,8 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 |-------|---------------|-------------|
 | `scripts/` | `/scripts:ro` | Build scripts |
 | `packaging/common/debian/` | `/packaging-common:ro` | Shared DEB files |
-| `packaging/N.x/debian/` | `/packaging-override:ro` | Version-specific overrides |
-| `packaging/templates/debian/` | `/packaging-templates:ro` | Templates (8.x/9.x+) |
+| `packaging/N.M/debian/` | `/packaging-override:ro` | Version-specific overrides |
+| `packaging/templates/debian/` | `/packaging-templates:ro` | Templates (8.1/9.0+) |
 | `output/` | `/output` | Built DEBs written here |
 
 **Execution flow:**
@@ -1068,7 +1068,7 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 ```
 1. Install build tools (build-essential, debhelper, devscripts, libssl-dev, etc.)
 2. Merge packaging layers: common/ → override/ → templates
-3. Generate control/rules from template (8.x/9.x, via generate-from-templates.sh)
+3. Generate control/rules from template (8.1/9.0+, via generate-from-templates.sh)
 4. Download and extract valkey source tarball
 5. Copy debian/ directory into source tree
 6. Override VALKEY_DOC_VERSION via sed
@@ -1107,13 +1107,13 @@ Input: 9.0.3
 
 | Major version | Action |
 |---------------|--------|
-| < 8 (7.x) | Skips entirely — 7.x uses files directly |
+| < 8 (7.2) | Skips entirely — 7.2 uses files directly |
 | >= 8, < 9 | Generates with `hiredis` as bundled dep |
 | >= 9 | Generates with `libvalkey` as bundled dep |
 
 **DEB processing:** Substitutes `@@MAJOR_VERSION@@` in `control.template` and `@@DOC_VERSION@@` in `rules.template`.
 
-**RPM processing:** Substitutes all placeholders in `valkey.spec.template`, then uses `awk` to replace `@@CHANGELOG@@` with the contents of `changelog-N.x` (multi-line replacement).
+**RPM processing:** Substitutes all placeholders in `valkey.spec.template`, then uses `awk` to replace `@@CHANGELOG@@` with the contents of `changelog-N.M` (multi-line replacement).
 
 ---
 
@@ -1168,14 +1168,14 @@ Upload:
 ```
 s3://bucket/
 ├── GPG-KEY-valkey.asc
-├── valkey-9/
+├── valkey-9.0/
 │   ├── rpm/
 │   │   ├── el9/x86_64/*.rpm + repodata/
 │   │   └── ...
 │   └── deb/
 │       ├── debian12/amd64/*.deb + Packages + Release + InRelease
 │       └── ...
-└── valkey-8/
+└── valkey-8.1/
     └── ...
 ```
 
