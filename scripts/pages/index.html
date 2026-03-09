@@ -398,12 +398,15 @@
   (function populateVersions() {
     var sel = document.getElementById("version-select");
     var versions = AVAILABLE_VERSIONS.split(",").filter(Boolean).sort(function(a, b) {
-      return parseInt(b) - parseInt(a);
+      var pa = a.split("."), pb = b.split(".");
+      var majorDiff = parseInt(pb[0]) - parseInt(pa[0]);
+      if (majorDiff !== 0) return majorDiff;
+      return parseInt(pb[1] || 0) - parseInt(pa[1] || 0);
     });
     for (var i = 0; i < versions.length; i++) {
       var opt = document.createElement("option");
       opt.value = versions[i];
-      opt.textContent = "Valkey " + versions[i] + ".x";
+      opt.textContent = "Valkey " + versions[i];
       sel.appendChild(opt);
     }
   })();
@@ -449,7 +452,7 @@
     var names = document.querySelectorAll(".os-name");
     for (var i = 0; i < names.length; i++) names[i].textContent = d.name;
     var vnames = document.querySelectorAll(".ver-name");
-    for (var i = 0; i < vnames.length; i++) vnames[i].textContent = ver + ".x";
+    for (var i = 0; i < vnames.length; i++) vnames[i].textContent = ver;
 
     if (d.type === "rpm") {
       document.getElementById("rpm-instructions").classList.add("active");
@@ -458,7 +461,7 @@
       document.getElementById("rpm-step2").textContent =
         "sudo tee /etc/yum.repos.d/valkey.repo << 'EOF'\n" +
         "[valkey]\n" +
-        "name=Valkey " + ver + ".x Packages for " + d.name + "\n" +
+        "name=Valkey " + ver + " Packages for " + d.name + "\n" +
         "baseurl=" + repoBase + "/rpm/" + os + "/$basearch/\n" +
         "enabled=1\n" +
         "gpgcheck=1\n" +
