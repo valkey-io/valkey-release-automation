@@ -28,8 +28,9 @@ The build system is structured around GitHub Actions workflows that produce RPM 
 ```
 valkey-release-automation/
 ├── .github/
+│   ├── package-platforms.json               # Shared platform matrix for packages.yml
 │   ├── actions/
-│   │   └── generate-package-build-matrix/   # Matrix generation action
+│   │   └── generate-package-build-matrix/   # Matrix generation action (binary tarballs)
 │   │       ├── action.yml
 │   │       └── build-config.json            # Platform/arch definitions
 │   └── workflows/
@@ -698,7 +699,8 @@ The `packaging/templates/` directory contains parameterized versions of files th
    - `changelog` — initial DEB changelog entry
    - `patches/` — regenerated DEB patches against the new source tree
 3. Create `packaging/templates/rpm/changelog-N.M` with the initial RPM changelog entry
-4. If the bundled dependency changes (e.g., libvalkey → something new), update the logic in `generate-from-templates.sh`
+4. To add a new distro/version, add its entry to `.github/package-platforms.json`
+5. If the bundled dependency changes (e.g., libvalkey → something new), update the logic in `generate-from-templates.sh`
 5. The template system handles `control`, `rules`, and `valkey.spec` automatically — no need to create these files
 
 **The generate script** (`scripts/generate-from-templates.sh`) accepts:
@@ -889,6 +891,8 @@ Default (no profile)   →  attempts download; 7.2 handles failure gracefully
 ---
 
 ## Platform Support Matrix
+
+Platforms are defined in [`.github/package-platforms.json`](.github/package-platforms.json). This single file drives the build and test matrices in `packages.yml` — adding or removing a platform there automatically updates all jobs.
 
 ### RPM Platforms
 
