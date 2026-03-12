@@ -212,14 +212,17 @@ if [ -n "$REPO" ]; then
     echo "Store these secrets manually in your repo settings:"
     echo "  S3_BUCKET=${BUCKET}"
     echo "  S3_REGION=${REGION}"
-    echo "  AWS_ACCESS_KEY_ID=${ACCESS_KEY_ID}"
-    echo "  AWS_SECRET_ACCESS_KEY=<see above>"
+    echo "  AWS_ROLE_TO_ASSUME=<your OIDC role ARN>"
+    echo ""
+    echo "NOTE: packages.yml uses OIDC (aws-actions/configure-aws-credentials)"
+    echo "instead of long-lived access keys. See README.md for OIDC role setup."
   else
     gh secret set S3_BUCKET --body "$BUCKET" --repo "$REPO"
     gh secret set S3_REGION --body "$REGION" --repo "$REPO"
-    gh secret set AWS_ACCESS_KEY_ID --body "$ACCESS_KEY_ID" --repo "$REPO"
-    gh secret set AWS_SECRET_ACCESS_KEY --body "$SECRET_ACCESS_KEY" --repo "$REPO"
-    echo "All 4 secrets stored in ${REPO}."
+    echo "S3_BUCKET and S3_REGION stored in ${REPO}."
+    echo ""
+    echo "NOTE: You must also set AWS_ROLE_TO_ASSUME with your OIDC role ARN."
+    echo "See README.md for OIDC identity provider and IAM role setup."
   fi
 fi
 
@@ -245,7 +248,6 @@ if [ -z "$REPO" ]; then
   echo "To store secrets in GitHub, run:"
   echo "  gh secret set S3_BUCKET --body \"${BUCKET}\" --repo owner/repo"
   echo "  gh secret set S3_REGION --body \"${REGION}\" --repo owner/repo"
-  echo "  gh secret set AWS_ACCESS_KEY_ID --body \"${ACCESS_KEY_ID}\" --repo owner/repo"
-  echo "  gh secret set AWS_SECRET_ACCESS_KEY --body \"<secret>\" --repo owner/repo"
+  echo "  gh secret set AWS_ROLE_TO_ASSUME --body \"<oidc-role-arn>\" --repo owner/repo"
   echo ""
 fi
