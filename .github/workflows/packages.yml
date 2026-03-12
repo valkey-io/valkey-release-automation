@@ -392,9 +392,10 @@ jobs:
           VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
           CONTAINER_NAME="test-rpm-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
-          # Start privileged container with systemd as PID 1.
-          # Many minimal Docker images lack /sbin/init, so we install
-          # systemd + test prerequisites, then exec the systemd binary.
+          # Start container with systemd as PID 1.
+          # Use minimal capabilities instead of --privileged:
+          # SYS_ADMIN is required for systemd cgroup management.
+          # seccomp=unconfined is needed for older systemd versions.
           if [ "${{ matrix.platform.family }}" = "suse" ]; then
             INIT_SCRIPT='
               zypper -n install -y systemd procps iproute2 2>/dev/null
@@ -426,7 +427,8 @@ jobs:
 
           docker run -d \
             --name "$CONTAINER_NAME" \
-            --privileged \
+            --cap-add SYS_ADMIN \
+            --security-opt seccomp=unconfined \
             --platform="$DOCKER_PLATFORM" \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             --cgroupns=host \
@@ -570,11 +572,14 @@ jobs:
           VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
           CONTAINER_NAME="test-deb-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
-          # Start privileged container with systemd as PID 1
-          # Install systemd + test prerequisites, then exec init
+          # Start container with systemd as PID 1
+          # Use minimal capabilities instead of --privileged:
+          # SYS_ADMIN is required for systemd cgroup management.
+          # seccomp=unconfined is needed for older systemd versions.
           docker run -d \
             --name "$CONTAINER_NAME" \
-            --privileged \
+            --cap-add SYS_ADMIN \
+            --security-opt seccomp=unconfined \
             --platform="$DOCKER_PLATFORM" \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             --cgroupns=host \
@@ -631,6 +636,9 @@ jobs:
     needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb]
     runs-on: ubuntu-latest
     if: success()
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -652,10 +660,13 @@ jobs:
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.S3_REGION }}
+
       - name: Sign packages and upload to S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           bash scripts/publish-to-s3.sh \
             "${{ needs.process-inputs.outputs.version }}" \
@@ -673,6 +684,7 @@ jobs:
     runs-on: ubuntu-latest
     if: success()
     permissions:
+      id-token: write
       contents: write
 
     steps:
@@ -703,10 +715,13 @@ jobs:
       - name: Install AWS CLI
         run: pip install awscli
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.S3_REGION }}
+
       - name: Generate site
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
           REPO_URL="https://${{ secrets.S3_BUCKET }}.s3.${{ secrets.S3_REGION }}.amazonaws.com"
