@@ -1,0 +1,5 @@
+valkey (7.2.12-1) unstable; urgency=medium
+
+  * Package Valkey 7.2.12 for 7.2.x release line
+
+ -- Evgeniy Patlan <evgeniy.patlan@percona.com>  Wed, 04 Mar 2026 08:00:00 +0000

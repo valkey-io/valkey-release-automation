@@ -1,0 +1,6 @@
+---
+Bug-Database: https://github.com/valkey-io/valkey/issues
+Bug-Submit: https://github.com/valkey-io/valkey/issues/new
+Repository: https://github.com/valkey-io/valkey.git
+Repository-Browse: https://github.com/valkey-io/valkey
+Security-Contact: https://github.com/valkey-io/valkey/tree/HEAD/SECURITY.md
