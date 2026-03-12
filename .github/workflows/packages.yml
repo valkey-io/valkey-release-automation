@@ -24,18 +24,43 @@ jobs:
     outputs:
       version: ${{ steps.derive.outputs.version }}
       packaging_dir: ${{ steps.derive.outputs.packaging_dir }}
+      rpm_matrix: ${{ steps.matrix.outputs.rpm }}
+      deb_matrix: ${{ steps.matrix.outputs.deb }}
     steps:
-      - name: Derive packaging directory from version
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          sparse-checkout: .github/package-platforms.json
+          sparse-checkout-cone-mode: false
+
+      - name: Validate version and derive packaging directory
         id: derive
         run: |
           VERSION="${{ inputs.version }}"
-          MAJOR="${VERSION%%.*}"
-          MINOR_PART="${VERSION#*.}"
+
+          # Validate semver format: x.y.z or x.y.z-rcN
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "ERROR: Invalid version format '${VERSION}'."
+            echo "Expected: x.y.z or x.y.z-rcN (e.g., 9.0.3, 8.1.0-rc1)"
+            exit 1
+          fi
+
+          VERSION_WITHOUT_RC="${VERSION%%-*}"
+          MAJOR="${VERSION_WITHOUT_RC%%.*}"
+          MINOR_PART="${VERSION_WITHOUT_RC#*.}"
           MINOR="${MINOR_PART%%.*}"
+
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "packaging_dir=${MAJOR}.${MINOR}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}"
           echo "Packaging directory: ${MAJOR}.${MINOR}"
+
+      - name: Generate platform matrices
+        id: matrix
+        run: |
+          CONFIG=".github/package-platforms.json"
+          echo "rpm=$(jq -c '.rpm' "$CONFIG")" >> "$GITHUB_OUTPUT"
+          echo "deb=$(jq -c '.deb' "$CONFIG")" >> "$GITHUB_OUTPUT"
 
   ############################################################################
   # RPM Builds
@@ -47,104 +72,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        arch: [x86_64, aarch64]
-        platform:
-          # SUSE/openSUSE
-          - name: "openSUSE Leap 15.5"
-            container: "opensuse/leap:15.5"
-            id: "opensuse-15.5"
-            family: "suse"
-            epel: "none"
-
-          - name: "openSUSE Leap 15.6"
-            container: "opensuse/leap:15.6"
-            id: "opensuse-15.6"
-            family: "suse"
-            epel: "none"
-
-          # Oracle Linux
-          - name: "Oracle Linux 8"
-            container: "oraclelinux:8"
-            id: "el8"
-            family: "rhel"
-            epel: "oracle-epel-release-el8"
-
-          - name: "Oracle Linux 9"
-            container: "oraclelinux:9"
-            id: "el9"
-            family: "rhel"
-            epel: "oracle-epel-release-el9"
-
-          - name: "Oracle Linux 10"
-            container: "oraclelinux:10"
-            id: "el10"
-            family: "rhel"
-            epel: "oracle-epel-release-el10"
-
-          # Rocky Linux
-          - name: "Rocky Linux 8"
-            container: "rockylinux:8"
-            id: "rocky8"
-            family: "rhel"
-            epel: "epel-release"
-
-          - name: "Rocky Linux 9"
-            container: "rockylinux:9"
-            id: "rocky9"
-            family: "rhel"
-            epel: "epel-release"
-
-          - name: "Rocky Linux 10"
-            container: "rockylinux/rockylinux:10"
-            id: "rocky10"
-            family: "rhel"
-            epel: "epel-release"
-
-          # AlmaLinux
-          - name: "AlmaLinux 8"
-            container: "almalinux:8"
-            id: "alma8"
-            family: "rhel"
-            epel: "epel-release"
-
-          - name: "AlmaLinux 9"
-            container: "almalinux:9"
-            id: "alma9"
-            family: "rhel"
-            epel: "epel-release"
-
-          - name: "AlmaLinux 10"
-            container: "almalinux:10"
-            id: "alma10"
-            family: "rhel"
-            epel: "epel-release"
-
-          # Amazon Linux
-          - name: "Amazon Linux 2023"
-            container: "amazonlinux:2023"
-            id: "amzn2023"
-            family: "rhel"
-            epel: "none"
-
-          # Fedora
-          - name: "Fedora 39"
-            container: "fedora:39"
-            id: "fedora39"
-            family: "rhel"
-            epel: "none"
-
-          - name: "Fedora 40"
-            container: "fedora:40"
-            id: "fedora40"
-            family: "rhel"
-            epel: "none"
-
-          - name: "Fedora 41"
-            container: "fedora:41"
-            id: "fedora41"
-            family: "rhel"
-            epel: "none"
+      matrix: ${{ fromJson(needs.process-inputs.outputs.rpm_matrix) }}
 
     steps:
       - name: Checkout packaging repo
@@ -192,35 +120,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
-        platform:
-          # Debian
-          - name: "Debian 11 (Bullseye)"
-            container: "debian:11"
-            id: "debian11"
-            codename: "bullseye"
-
-          - name: "Debian 12 (Bookworm)"
-            container: "debian:12"
-            id: "debian12"
-            codename: "bookworm"
-
-          - name: "Debian 13 (Trixie)"
-            container: "debian:trixie"
-            id: "debian13"
-            codename: "trixie"
-
-          # Ubuntu
-          - name: "Ubuntu 22.04 (Jammy)"
-            container: "ubuntu:22.04"
-            id: "ubuntu2204"
-            codename: "jammy"
-
-          - name: "Ubuntu 24.04 (Noble)"
-            container: "ubuntu:24.04"
-            id: "ubuntu2404"
-            codename: "noble"
+      matrix: ${{ fromJson(needs.process-inputs.outputs.deb_matrix) }}
 
     steps:
       - name: Checkout packaging repo
@@ -287,89 +187,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        arch: [x86_64, aarch64]
-        platform:
-          # SUSE/openSUSE
-          - name: "openSUSE Leap 15.5"
-            container: "opensuse/leap:15.5"
-            id: "opensuse-15.5"
-            family: "suse"
-
-          - name: "openSUSE Leap 15.6"
-            container: "opensuse/leap:15.6"
-            id: "opensuse-15.6"
-            family: "suse"
-
-          # Oracle Linux
-          - name: "Oracle Linux 8"
-            container: "oraclelinux:8"
-            id: "el8"
-            family: "rhel"
-
-          - name: "Oracle Linux 9"
-            container: "oraclelinux:9"
-            id: "el9"
-            family: "rhel"
-
-          - name: "Oracle Linux 10"
-            container: "oraclelinux:10"
-            id: "el10"
-            family: "rhel"
-
-          # Rocky Linux
-          - name: "Rocky Linux 8"
-            container: "rockylinux:8"
-            id: "rocky8"
-            family: "rhel"
-
-          - name: "Rocky Linux 9"
-            container: "rockylinux:9"
-            id: "rocky9"
-            family: "rhel"
-
-          - name: "Rocky Linux 10"
-            container: "rockylinux/rockylinux:10"
-            id: "rocky10"
-            family: "rhel"
-
-          # AlmaLinux
-          - name: "AlmaLinux 8"
-            container: "almalinux:8"
-            id: "alma8"
-            family: "rhel"
-
-          - name: "AlmaLinux 9"
-            container: "almalinux:9"
-            id: "alma9"
-            family: "rhel"
-
-          - name: "AlmaLinux 10"
-            container: "almalinux:10"
-            id: "alma10"
-            family: "rhel"
-
-          # Amazon Linux
-          - name: "Amazon Linux 2023"
-            container: "amazonlinux:2023"
-            id: "amzn2023"
-            family: "rhel"
-
-          # Fedora
-          - name: "Fedora 39"
-            container: "fedora:39"
-            id: "fedora39"
-            family: "rhel"
-
-          - name: "Fedora 40"
-            container: "fedora:40"
-            id: "fedora40"
-            family: "rhel"
-
-          - name: "Fedora 41"
-            container: "fedora:41"
-            id: "fedora41"
-            family: "rhel"
+      matrix: ${{ fromJson(needs.process-inputs.outputs.rpm_matrix) }}
 
     steps:
       - name: Checkout repo
@@ -392,40 +210,9 @@ jobs:
           VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
           CONTAINER_NAME="test-rpm-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
-          # Start container with systemd as PID 1.
-          # Use minimal capabilities instead of --privileged:
-          # SYS_ADMIN is required for systemd cgroup management.
-          # seccomp=unconfined is needed for older systemd versions.
-          if [ "${{ matrix.platform.family }}" = "suse" ]; then
-            INIT_SCRIPT='
-              zypper -n install -y systemd procps iproute2 2>/dev/null
-              INIT=$(readlink -f /sbin/init 2>/dev/null || true)
-              [ -x "$INIT" ] || INIT=/usr/lib/systemd/systemd
-              exec $INIT
-            '
-          else
-            INIT_SCRIPT='
-              if command -v dnf5 &>/dev/null; then
-                dnf5 install -y systemd procps-ng iproute
-              elif command -v dnf &>/dev/null; then
-                dnf install -y systemd procps-ng iproute
-              else
-                yum install -y systemd procps-ng iproute
-              fi
-              # Mask dnf/dnf5 makecache timers to prevent background cache
-              # operations that corrupt the dnf cache and cause lock file errors
-              mkdir -p /etc/systemd/system
-              ln -sf /dev/null /etc/systemd/system/dnf-makecache.timer 2>/dev/null || true
-              ln -sf /dev/null /etc/systemd/system/dnf-makecache.service 2>/dev/null || true
-              ln -sf /dev/null /etc/systemd/system/dnf5-makecache.timer 2>/dev/null || true
-              ln -sf /dev/null /etc/systemd/system/dnf5-makecache.service 2>/dev/null || true
-              INIT=$(readlink -f /sbin/init 2>/dev/null || true)
-              [ -x "$INIT" ] || INIT=/usr/lib/systemd/systemd
-              exec $INIT
-            '
-          fi
-
-          docker run -d \
+          # Phase 1: Install systemd prerequisites in a plain container.
+          # This avoids racing with systemd for package manager locks.
+          docker create \
             --name "$CONTAINER_NAME" \
             --cap-add SYS_ADMIN \
             --security-opt seccomp=unconfined \
@@ -435,9 +222,38 @@ jobs:
             --tmpfs /run \
             --tmpfs /run/lock \
             ${{ matrix.platform.container }} \
-            bash -c "$INIT_SCRIPT"
+            /sbin/init
 
-          # Wait for systemd to reach a running state
+          docker start "$CONTAINER_NAME"
+
+          echo "Installing systemd prerequisites..."
+          if [ "${{ matrix.platform.family }}" = "suse" ]; then
+            docker exec "$CONTAINER_NAME" bash -c \
+              'zypper -n install -y systemd procps iproute2 2>/dev/null'
+          else
+            docker exec "$CONTAINER_NAME" bash -c '
+              if command -v dnf5 &>/dev/null; then
+                dnf5 install -y systemd procps-ng iproute
+              elif command -v dnf &>/dev/null; then
+                dnf install -y systemd procps-ng iproute
+              else
+                yum install -y systemd procps-ng iproute
+              fi
+              # Mask makecache timers before systemd starts to prevent
+              # background cache operations from holding package manager locks
+              mkdir -p /etc/systemd/system
+              ln -sf /dev/null /etc/systemd/system/dnf-makecache.timer 2>/dev/null || true
+              ln -sf /dev/null /etc/systemd/system/dnf-makecache.service 2>/dev/null || true
+              ln -sf /dev/null /etc/systemd/system/dnf5-makecache.timer 2>/dev/null || true
+              ln -sf /dev/null /etc/systemd/system/dnf5-makecache.service 2>/dev/null || true
+            '
+          fi
+
+          # Phase 2: Restart with systemd as PID 1.
+          # Prerequisites are already installed so no package manager runs.
+          docker stop "$CONTAINER_NAME" >/dev/null 2>&1
+          docker start "$CONTAINER_NAME"
+
           echo "Waiting for systemd to initialize..."
           for i in $(seq 1 60); do
             if docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; then
@@ -447,50 +263,10 @@ jobs:
             if [ "$i" -eq 60 ]; then
               echo "WARNING: systemd did not reach running state within 60 seconds"
               docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null || true
-              # Show container logs for debugging
               docker logs "$CONTAINER_NAME" 2>&1 | tail -20
             fi
             sleep 1
           done
-
-          # Wait for any package manager locks to be released (zypper/dnf from init)
-          echo "Waiting for package manager to finish..."
-          for i in $(seq 1 120); do
-            BUSY=$(docker exec "$CONTAINER_NAME" bash -c '
-              for proc in zypper dnf dnf5 yum rpm; do
-                if pgrep -x "$proc" >/dev/null 2>&1; then
-                  echo "$proc"
-                  exit 0
-                fi
-              done
-              # Also check lock files
-              for lf in /var/run/zypp.pid /var/cache/dnf/metadata_lock.pid /var/cache/dnf/download_lock.pid; do
-                if [ -f "$lf" ]; then
-                  echo "lockfile:$lf"
-                  exit 0
-                fi
-              done
-              exit 1
-            ' 2>/dev/null || true)
-            if [ -z "$BUSY" ]; then
-              echo "Package manager is idle (attempt $i)"
-              break
-            fi
-            if [ "$((i % 10))" -eq 0 ]; then
-              echo "Still waiting... ($BUSY running, attempt $i)"
-            fi
-            if [ "$i" -eq 120 ]; then
-              echo "WARNING: package manager still busy after 120 seconds ($BUSY)"
-            fi
-            sleep 1
-          done
-
-          # Ensure dnf/dnf5 makecache is stopped and cache is clean
-          docker exec "$CONTAINER_NAME" bash -c '
-            systemctl mask dnf-makecache.timer dnf-makecache.service dnf5-makecache.timer dnf5-makecache.service 2>/dev/null || true
-            systemctl stop dnf-makecache.timer dnf-makecache.service dnf5-makecache.timer dnf5-makecache.service 2>/dev/null || true
-            if command -v dnf5 &>/dev/null; then dnf5 clean all 2>/dev/null; elif command -v dnf &>/dev/null; then dnf clean all 2>/dev/null; fi
-          ' 2>/dev/null || true
 
           # Copy packages and test script into container
           docker cp packages/. "$CONTAINER_NAME":/packages/
@@ -526,30 +302,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
-        platform:
-          # Debian
-          - name: "Debian 11 (Bullseye)"
-            container: "debian:11"
-            id: "debian11"
-
-          - name: "Debian 12 (Bookworm)"
-            container: "debian:12"
-            id: "debian12"
-
-          - name: "Debian 13 (Trixie)"
-            container: "debian:trixie"
-            id: "debian13"
-
-          # Ubuntu
-          - name: "Ubuntu 22.04 (Jammy)"
-            container: "ubuntu:22.04"
-            id: "ubuntu2204"
-
-          - name: "Ubuntu 24.04 (Noble)"
-            container: "ubuntu:24.04"
-            id: "ubuntu2404"
+      matrix: ${{ fromJson(needs.process-inputs.outputs.deb_matrix) }}
 
     steps:
       - name: Checkout repo
@@ -572,11 +325,9 @@ jobs:
           VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
           CONTAINER_NAME="test-deb-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
-          # Start container with systemd as PID 1
-          # Use minimal capabilities instead of --privileged:
-          # SYS_ADMIN is required for systemd cgroup management.
-          # seccomp=unconfined is needed for older systemd versions.
-          docker run -d \
+          # Phase 1: Install systemd prerequisites in a plain container.
+          # This avoids racing with systemd for package manager locks.
+          docker create \
             --name "$CONTAINER_NAME" \
             --cap-add SYS_ADMIN \
             --security-opt seccomp=unconfined \
@@ -586,9 +337,19 @@ jobs:
             --tmpfs /run \
             --tmpfs /run/lock \
             ${{ matrix.platform.container }} \
-            bash -c 'apt-get update && apt-get install -y systemd systemd-sysv procps iproute2 && exec /sbin/init'
+            /sbin/init
 
-          # Wait for systemd to reach a running state
+          docker start "$CONTAINER_NAME"
+
+          echo "Installing systemd prerequisites..."
+          docker exec "$CONTAINER_NAME" bash -c \
+            'apt-get update && apt-get install -y systemd systemd-sysv procps iproute2'
+
+          # Phase 2: Restart with systemd as PID 1.
+          # Prerequisites are already installed so no package manager runs.
+          docker stop "$CONTAINER_NAME" >/dev/null 2>&1
+          docker start "$CONTAINER_NAME"
+
           echo "Waiting for systemd to initialize..."
           for i in $(seq 1 60); do
             if docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; then
@@ -598,7 +359,6 @@ jobs:
             if [ "$i" -eq 60 ]; then
               echo "WARNING: systemd did not reach running state within 60 seconds"
               docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null || true
-              # Show container logs for debugging
               docker logs "$CONTAINER_NAME" 2>&1 | tail -20
             fi
             sleep 1

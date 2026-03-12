@@ -25,23 +25,28 @@ apt-get install -y \
   gzip \
   lsb-release
 
-# Install all required build dependencies
-echo "Installing Valkey build dependencies..."
-apt-get install -y libjemalloc-dev
-ls -lah /usr/include/jemalloc/jemalloc.h
-apt-get install -y libsystemd-dev
-apt-get -y install pkg-config || true
-apt-get -y install pkgconf || true
+# Critical build dependencies — hard-fail if any of these are missing.
+# These are required to produce correct, working binaries.
+echo "Installing critical build dependencies..."
 apt-get install -y \
   libjemalloc-dev \
   libssl-dev \
+  libsystemd-dev \
   tcl \
   tcl-dev \
-  libsystemd-dev \
-  python3 \
-  python3-sphinx \
-  python3-sphinx-rtd-theme \
-  python3-yaml \
+  python3
+
+# At least one of pkg-config/pkgconf must be available
+apt-get install -y pkg-config || apt-get install -y pkgconf
+
+echo "Verifying critical headers..."
+ls -lah /usr/include/jemalloc/jemalloc.h
+ls -lah /usr/include/openssl/ssl.h
+
+# Optional dependencies — not available on all distros, build can
+# proceed without them (bundled alternatives or doc-only packages).
+echo "Installing optional build dependencies..."
+for pkg in \
   dh-exec \
   libhiredis-dev \
   liblua5.1-dev \
@@ -49,49 +54,12 @@ apt-get install -y \
   lua-bitop-dev \
   lua-cjson-dev \
   pandoc \
-  tcl-tls || {
-    echo "Some packages not available, trying alternatives..."
-
-    apt-get install -y \
-      libjemalloc-dev \
-      libssl-dev \
-      pkg-config \
-      pkgconf \
-      tcl \
-      tcl-dev \
-      libsystemd-dev \
-      python3 \
-      python3-sphinx \
-      python3-sphinx-rtd-theme \
-      python3-yaml \
-      dh-exec || true
-
-    apt-get install -y libhiredis-dev || echo "libhiredis-dev not available"
-    apt-get install -y liblua5.1-dev || echo "liblua5.1-dev not available"
-    apt-get install -y liblzf-dev || echo "liblzf-dev not available"
-    apt-get install -y lua-bitop-dev || echo "lua-bitop-dev not available"
-    apt-get install -y lua-cjson-dev || echo "lua-cjson-dev not available"
-    apt-get install -y pandoc || echo "pandoc not available"
-    apt-get install -y tcl-tls || echo "tcl-tls not available"
-  }
-
-# Check jemalloc installation
-echo ""
-echo "Checking jemalloc installation..."
-if dpkg -l | grep -q libjemalloc-dev; then
-  echo "✓ libjemalloc-dev is installed"
-  dpkg -L libjemalloc-dev | grep "\.h$" | head -5 || echo "No header files found"
-
-  if [ -f "/usr/include/jemalloc/jemalloc.h" ]; then
-    echo "✓ jemalloc.h found at /usr/include/jemalloc/jemalloc.h"
-  else
-    echo "⚠ jemalloc.h NOT found at expected location"
-    echo "Searching for jemalloc.h..."
-    find /usr -name "jemalloc.h" 2>/dev/null || echo "Not found anywhere"
-  fi
-else
-  echo "⚠ libjemalloc-dev is NOT installed"
-fi
+  python3-sphinx \
+  python3-sphinx-rtd-theme \
+  python3-yaml \
+  tcl-tls; do
+  apt-get install -y "$pkg" 2>/dev/null || echo "NOTICE: $pkg not available — skipping"
+done
 
 echo "::endgroup::"
 echo ""
@@ -213,39 +181,33 @@ else
   echo "mk-build-deps not available"
 fi
 
-# Check what dependencies are still missing
+# Check what dependencies are still missing and attempt to install them
 echo ""
 echo "Checking build dependencies..."
-dpkg-checkbuilddeps 2>&1 | tee /tmp/missing-deps.txt || {
+if ! dpkg-checkbuilddeps 2>&1 | tee /tmp/missing-deps.txt; then
   echo ""
   echo "Some dependencies are missing, attempting to install..."
 
-  if [ -f /tmp/missing-deps.txt ]; then
-    MISSING_DEPS=$(grep "Unmet build dependencies:" /tmp/missing-deps.txt | sed "s/.*dependencies: //" | tr " " "\n" | grep -v "^$" | sed "s/(.*)//g" || true)
+  MISSING_DEPS=$(grep "Unmet build dependencies:" /tmp/missing-deps.txt | sed "s/.*dependencies: //" | tr " " "\n" | grep -v "^$" | sed "s/(.*)//g" || true)
 
-    if [ -n "$MISSING_DEPS" ]; then
-      echo "Missing dependencies:"
-      echo "$MISSING_DEPS"
-      echo ""
-      echo "Attempting to install missing dependencies..."
-
-      for dep in $MISSING_DEPS; do
-        echo "Installing $dep..."
-        apt-get install -y "$dep" || echo "Could not install $dep"
-      done
-    fi
+  if [ -n "$MISSING_DEPS" ]; then
+    echo "Missing dependencies: $MISSING_DEPS"
+    for dep in $MISSING_DEPS; do
+      echo "Installing $dep..."
+      apt-get install -y "$dep" || echo "NOTICE: Could not install $dep"
+    done
   fi
-}
+fi
 
-# Final dependency check
+# Final dependency check — fail the build if critical deps are unmet
 echo ""
 echo "Final dependency check:"
 if dpkg-checkbuilddeps; then
   echo "✓ All build dependencies satisfied"
 else
-  echo "⚠ Some dependencies may be missing"
-  echo "Attempting to build anyway with -d flag..."
-  export USE_D_FLAG="-d"
+  echo "ERROR: Unmet build dependencies — refusing to build broken packages"
+  dpkg-checkbuilddeps 2>&1
+  exit 1
 fi
 
 echo "::endgroup::"
@@ -257,8 +219,8 @@ export DEB_VERSION="${VALKEY_VERSION}-1.${PLATFORM_CODENAME}"
 
 if ! grep -q "$DEB_VERSION" debian/changelog; then
   echo "Updating changelog for ${PLATFORM_CODENAME}..."
-  DEBFULLNAME="Evgeniy Patlan" \
-  DEBEMAIL="evgeniy.patlan@percona.com" \
+  DEBFULLNAME="${DEBFULLNAME:-Valkey Build System}" \
+  DEBEMAIL="${DEBEMAIL:-build@valkey.io}" \
   dch -v "$DEB_VERSION" \
     -D "${PLATFORM_CODENAME}" \
     "Automated build for ${PLATFORM_CODENAME}"
@@ -273,7 +235,7 @@ echo ""
 echo "::group::Build Debian packages"
 
 echo "Building packages for ${EXPECTED_ARCH}..."
-dpkg-buildpackage -b -us -uc -a${EXPECTED_ARCH} ${USE_D_FLAG:-}
+dpkg-buildpackage -b -us -uc -a${EXPECTED_ARCH}
 
 echo "::endgroup::"
 echo ""

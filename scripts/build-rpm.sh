@@ -198,12 +198,12 @@ else
   echo "%is_rhel 1" > ~/.rpmmacros
 fi
 
-# Build RPM - use --without doc if pandoc not installed
+# Build RPM - use --without docs if pandoc not installed
 if [[ "$PLATFORM_ID" == fedora* ]]; then
   echo "Building without docs for Fedora..."
   sed -i "/^BuildRequires:.*pandoc/d" valkey.spec
   sed -i "/^BuildRequires:.*python3-pyyaml/d" valkey.spec
-  rpmbuild -ba --without doc valkey.spec
+  rpmbuild -ba --without docs valkey.spec
 elif command -v pandoc &> /dev/null; then
   echo "Building with documentation (pandoc is installed)"
   rpmbuild -ba valkey.spec
