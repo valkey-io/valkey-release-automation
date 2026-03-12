@@ -137,6 +137,9 @@ gpg --armor --export "$GPG_KEY" > "${STAGING}/GPG-KEY-valkey.asc"
 ################################################################################
 echo ""
 echo "Uploading to s3://${S3_BUCKET}/..."
+# Sync without --delete: multiple patch versions (e.g. 9.0.2, 9.0.4)
+# share the same repo directory (valkey-9.0/rpm/el9/x86_64/), so
+# --delete would remove packages from other patch releases.
 aws s3 sync "${STAGING}/" "s3://${S3_BUCKET}/"
 echo "Upload complete."
 echo "Packages available at: https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com"
