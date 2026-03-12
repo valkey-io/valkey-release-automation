@@ -2,9 +2,8 @@
 # Sign packages, build RPM/DEB repositories, and upload to S3.
 # Usage: publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_region>
 #
-# Environment variables:
-#   AWS_ACCESS_KEY_ID     - AWS access key (from GitHub secrets)
-#   AWS_SECRET_ACCESS_KEY - AWS secret key (from GitHub secrets)
+# AWS credentials are expected to be configured via OIDC
+# (aws-actions/configure-aws-credentials) before calling this script.
 set -euo pipefail
 
 VERSION="$1"
