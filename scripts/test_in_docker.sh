@@ -176,7 +176,8 @@ start_container() {
 
     log "Starting container $name ($image)..."
     docker run -d \
-        --privileged \
+        --cap-add SYS_ADMIN \
+        --security-opt seccomp=unconfined \
         --name "$name" \
         --tmpfs /run \
         --tmpfs /run/lock \

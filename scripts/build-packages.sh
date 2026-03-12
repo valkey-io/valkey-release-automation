@@ -303,7 +303,7 @@ build_rpm() {
       if [[ "$PLATFORM_ID" == fedora* ]]; then
         sed -i "/^BuildRequires:.*pandoc/d" valkey.spec
         sed -i "/^BuildRequires:.*python3-pyyaml/d" valkey.spec
-        rpmbuild --define "_topdir ${BUILD_ROOT}" -ba --without doc valkey.spec
+        rpmbuild --define "_topdir ${BUILD_ROOT}" -ba --without docs valkey.spec
       elif command -v pandoc &>/dev/null; then
         rpmbuild --define "_topdir ${BUILD_ROOT}" -ba valkey.spec
       else
@@ -343,7 +343,8 @@ test_deb() {
   log "Testing DEB: ${id} (${container})"
 
   if docker run --rm \
-    --privileged \
+    --cap-add SYS_ADMIN \
+    --security-opt seccomp=unconfined \
     -e DEBIAN_FRONTEND=noninteractive \
     -e VALKEY_VERSION="${VALKEY_VERSION}" \
     -v "${REPO_DIR}:/repo:ro" \
@@ -376,7 +377,8 @@ test_rpm() {
   log "Testing RPM: ${id} (${container})"
 
   if docker run --rm \
-    --privileged \
+    --cap-add SYS_ADMIN \
+    --security-opt seccomp=unconfined \
     -e VALKEY_VERSION="${VALKEY_VERSION}" \
     -v "${REPO_DIR}:/repo:ro" \
     -v "${pkg_dir}:/packages:ro" \
