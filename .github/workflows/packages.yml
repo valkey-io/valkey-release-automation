@@ -13,6 +13,17 @@ on:
         description: 'Valkey version to build packages for (e.g., 9.0.3)'
         required: true
         type: string
+  pull_request:
+    paths:
+      - '.github/workflows/packages.yml'
+      - '.github/package-platforms.json'
+      - 'packaging/**'
+      - 'scripts/build-rpm.sh'
+      - 'scripts/build-deb.sh'
+      - 'scripts/publish-to-s3.sh'
+      - 'scripts/publish-repos.sh'
+      - 'scripts/generate-from-templates.sh'
+      - 'scripts/test_packages.sh'
 
 jobs:
   ############################################################################
@@ -30,13 +41,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          sparse-checkout: .github/package-platforms.json
+          sparse-checkout: |
+            .github/package-platforms.json
+            packaging/*/debian/changelog
           sparse-checkout-cone-mode: false
 
       - name: Validate version and derive packaging directory
         id: derive
         run: |
           VERSION="${{ inputs.version }}"
+
+          # For pull_request triggers, detect version from the latest packaging changelog
+          if [ -z "$VERSION" ]; then
+            LATEST_DIR=$(ls -d packaging/[0-9]*/ 2>/dev/null | sort -V | tail -1)
+            if [ -n "$LATEST_DIR" ] && [ -f "${LATEST_DIR}debian/changelog" ]; then
+              VERSION=$(head -1 "${LATEST_DIR}debian/changelog" | sed 's/.*(\([^)]*\)).*/\1/' | sed 's/-.*//')
+              echo "No version input — detected ${VERSION} from ${LATEST_DIR}debian/changelog"
+            else
+              VERSION="8.1.1"
+              echo "No version input and no changelog found — using fallback ${VERSION}"
+            fi
+          fi
 
           # Validate semver format: x.y.z or x.y.z-rcN
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
@@ -395,7 +420,7 @@ jobs:
     name: Publish to S3
     needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb]
     runs-on: ubuntu-latest
-    if: success()
+    if: success() && github.event_name != 'pull_request'
     permissions:
       id-token: write
       contents: read
@@ -442,7 +467,7 @@ jobs:
     name: Deploy Pages
     needs: [process-inputs, publish-to-s3]
     runs-on: ubuntu-latest
-    if: success()
+    if: success() && github.event_name != 'pull_request'
     permissions:
       id-token: write
       contents: write
