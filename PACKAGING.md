@@ -16,6 +16,7 @@ Comprehensive documentation for the Valkey release automation and packaging infr
 - [Documentation Handling](#documentation-handling)
 - [Platform Support Matrix](#platform-support-matrix)
 - [Package Hosting Architecture](#package-hosting-architecture)
+- [New Environment Setup](#new-environment-setup)
 - [Build Validation](#build-validation)
 - [Scripts Reference](#scripts-reference)
 
@@ -49,7 +50,8 @@ valkey-release-automation/
 │   ├── generate-from-templates.sh           # Template processor (8.1/9.0+)
 │   ├── publish-to-s3.sh                     # Sign packages + build repos, upload to S3
 │   ├── publish-repos.sh                     # Generate GH Pages site (install instructions)
-│   ├── setup-github-pages.sh                # One-time GPG + GH Pages + S3 setup
+│   ├── setup-s3-bucket.sh                   # One-time S3 bucket + OIDC role creation
+│   ├── setup-github-pages.sh                # One-time GPG + GH Pages setup
 │   ├── test_packages.sh                     # Package install/removal test suite
 │   ├── test_in_docker.sh                    # Run test_packages.sh in Docker locally
 │   ├── build-packages.sh                    # Legacy standalone build script
@@ -954,8 +956,7 @@ Signed packages are hosted on **AWS S3** (public read), while install instructio
 - `GPG_PRIVATE_KEY` — GPG signing key
 - `S3_BUCKET` — S3 bucket name
 - `S3_REGION` — S3 bucket region
-- `AWS_ACCESS_KEY_ID` — AWS access key for S3 uploads
-- `AWS_SECRET_ACCESS_KEY` — AWS secret key for S3 uploads
+- `AWS_ROLE_TO_ASSUME` — IAM role ARN for OIDC federation (used by `aws-actions/configure-aws-credentials`)
 
 **S3 bucket policy** (minimal public read):
 ```json
@@ -971,6 +972,97 @@ Signed packages are hosted on **AWS S3** (public read), while install instructio
 ```
 
 No static website hosting is needed — S3 direct URLs work for `dnf`/`apt`/`zypper`.
+
+---
+
+## New Environment Setup
+
+Step-by-step guide to deploy the packaging pipeline from scratch on a new GitHub repository and AWS account.
+
+### Prerequisites
+
+- AWS CLI installed and configured (`aws configure`) with IAM permissions for S3 and IAM
+- GitHub CLI authenticated (`gh auth login`) with admin access to the target repository
+- `gpg` installed
+- The repository cloned locally
+
+### Step 1: Create S3 Bucket and OIDC Role
+
+Run the setup script from inside the repository:
+
+```bash
+./scripts/setup-s3-bucket.sh --bucket valkey-packages --region us-east-1 --repo owner/repo
+```
+
+This creates the S3 bucket, disables Block Public Access, applies a public-read policy, creates the GitHub OIDC identity provider in AWS, creates an IAM role with S3 upload permissions, and stores `S3_BUCKET`, `S3_REGION`, and `AWS_ROLE_TO_ASSUME` as GitHub secrets.
+
+If you prefer to do this manually, see the [README.md Authentication Setup](#authentication-setup) section.
+
+### Step 2: Generate GPG Key and Configure GitHub Pages
+
+```bash
+./scripts/setup-github-pages.sh --repo owner/repo \
+  --s3-bucket valkey-packages --s3-region us-east-1 --aws-role arn:aws:iam::123456789012:role/GitHubActions-ValkeyPackages
+```
+
+This generates a 4096-bit RSA GPG signing key, stores it as the `GPG_PRIVATE_KEY` secret, enables workflow read/write permissions, creates the `gh-pages` branch, and configures GitHub Pages.
+
+### Step 3: Verify Secrets
+
+Confirm all required secrets are set:
+
+```bash
+gh secret list --repo owner/repo
+```
+
+Expected secrets:
+
+| Secret | Source |
+|--------|--------|
+| `GPG_PRIVATE_KEY` | `setup-github-pages.sh` (Step 2) |
+| `S3_BUCKET` | `setup-s3-bucket.sh` (Step 1) |
+| `S3_REGION` | `setup-s3-bucket.sh` (Step 1) |
+| `AWS_ROLE_TO_ASSUME` | `setup-s3-bucket.sh` (Step 1) |
+
+### Step 4: Export GPG Public Key
+
+Save the public key for reference (users will import this to verify packages):
+
+```bash
+gpg --armor --export packages@valkey.io > GPG-KEY-valkey.asc
+```
+
+### Step 5: Trigger a Build
+
+Run the workflow manually to verify the full pipeline:
+
+```bash
+gh workflow run packages.yml \
+  --repo owner/repo \
+  -f version=9.0.4 \
+  -f environment=prod
+```
+
+### Step 6: Verify Output
+
+After the workflow completes:
+
+```bash
+# Check S3 — RPM repo should exist
+curl -s https://valkey-packages.s3.us-east-1.amazonaws.com/valkey-9.0/rpm/el9/x86_64/repodata/repomd.xml | head -5
+
+# Check GitHub Pages — install instructions should be live
+curl -s https://owner.github.io/repo/ | head -5
+
+# Check GPG public key is published
+curl -s https://valkey-packages.s3.us-east-1.amazonaws.com/GPG-KEY-valkey.asc | head -3
+```
+
+### Adding a New Distro or Version
+
+1. Add the platform entry to `.github/package-platforms.json` — this automatically includes it in both build and test jobs
+2. If adding a new Valkey major.minor, create a `packaging/N.M/` directory (see [Version Management](#version-management))
+3. Run a test build with the new version/platform to verify
 
 ---
 
@@ -1142,7 +1234,7 @@ publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_reg
 | `s3_bucket` | `valkey-packages` | S3 bucket name |
 | `s3_region` | `us-east-1` | S3 bucket region |
 
-**Environment variables:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (from GitHub secrets)
+**AWS credentials:** Provided via OIDC using `aws-actions/configure-aws-credentials` and `AWS_ROLE_TO_ASSUME` secret
 
 **Execution flow:**
 
@@ -1273,14 +1365,51 @@ test_packages.sh --pkg-dir=/path/to/packages [--version=X.Y.Z]
 
 ---
 
+### setup-s3-bucket.sh
+
+**Purpose:** One-time setup script that creates and configures an S3 bucket for hosting Valkey packages, and sets up OIDC federation for GitHub Actions.
+
+**Usage:**
+```bash
+./setup-s3-bucket.sh --bucket valkey-packages --region us-east-1 --repo owner/repo
+```
+
+**Prerequisites:** AWS CLI configured (`aws configure`) with `s3:*` and `iam:*` permissions.
+
+**What it does (6 steps):**
+
+```
+Step 1: Create S3 bucket
+  └── aws s3api create-bucket (skips if exists)
+
+Step 2: Disable Block Public Access
+  └── aws s3api put-public-access-block (all false)
+
+Step 3: Apply public-read bucket policy
+  └── s3:GetObject for * on arn:aws:s3:::BUCKET/*
+
+Step 4: Create OIDC provider and IAM role
+  └── GitHub OIDC identity provider (idempotent)
+  └── IAM role with trust policy scoped to repo
+  └── S3 upload permissions (PutObject, ListBucket, GetObject, DeleteObject)
+
+Step 5: Verify public access
+  └── Uploads test object, checks HTTP 200, cleans up
+
+Step 6: Store secrets in GitHub (if --repo provided)
+  └── S3_BUCKET, S3_REGION, AWS_ROLE_TO_ASSUME
+```
+
+---
+
 ### setup-github-pages.sh
 
-**Purpose:** One-time setup script that configures everything needed for GitHub Pages + S3 package repository deployment.
+**Purpose:** One-time setup script that generates a GPG signing key, stores it as a GitHub secret, and configures GitHub Pages deployment.
 
 **Usage:**
 ```bash
 ./setup-github-pages.sh [--key-name "Name"] [--key-email "email@example.com"] \
-  [--s3-bucket BUCKET] [--s3-region REGION] [--aws-key-id KEY_ID] [--aws-secret SECRET]
+  [--s3-bucket BUCKET] [--s3-region REGION] [--aws-role ROLE_ARN]
 ```
 
 **Prerequisites:** `gh` CLI authenticated, `gpg` installed, run from inside the git repository.
@@ -1295,9 +1424,9 @@ Step 1: Generate GPG signing key
 Step 2: Store GPG private key as GitHub Actions secret
   └── gpg --export-secret-keys | gh secret set GPG_PRIVATE_KEY
 
-Step 2b: Store S3 credentials as GitHub Actions secrets
-  └── S3_BUCKET, S3_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-      (interactive prompts or --s3-bucket/--s3-region/--aws-key-id/--aws-secret flags)
+Step 2b: Store S3 and OIDC secrets as GitHub Actions secrets
+  └── S3_BUCKET, S3_REGION, AWS_ROLE_TO_ASSUME
+      (interactive prompts or --s3-bucket/--s3-region/--aws-role flags)
 
 Step 3: Enable workflow read/write permissions
   └── gh api repos/.../actions/permissions/workflow (default_workflow_permissions=write)

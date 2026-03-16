@@ -5,8 +5,8 @@
 #   1. Creates an S3 bucket
 #   2. Disables "Block Public Access"
 #   3. Applies a public-read bucket policy
-#   4. Creates an IAM user with upload permissions
-#   5. Generates access keys for the IAM user
+#   4. Creates OIDC identity provider and IAM role for GitHub Actions
+#   5. Verifies public access
 #   6. Optionally stores secrets in GitHub
 #
 # Prerequisites:
@@ -15,32 +15,31 @@
 #   - Optional: gh CLI for storing GitHub secrets
 #
 # Usage:
-#   ./setup-s3-bucket.sh [--bucket NAME] [--region REGION] [--iam-user NAME] [--repo "owner/repo"]
+#   ./setup-s3-bucket.sh [--bucket NAME] [--region REGION] [--repo "owner/repo"]
 
 set -euo pipefail
 
 # Defaults
 BUCKET=""
 REGION="us-east-1"
-IAM_USER="valkey-ci-uploader"
 REPO=""
+ROLE_NAME="GitHubActions-ValkeyPackages"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --bucket)    BUCKET="$2"; shift 2 ;;
-    --region)    REGION="$2"; shift 2 ;;
-    --iam-user)  IAM_USER="$2"; shift 2 ;;
-    --repo)      REPO="$2"; shift 2 ;;
+    --bucket)      BUCKET="$2"; shift 2 ;;
+    --region)      REGION="$2"; shift 2 ;;
+    --repo)        REPO="$2"; shift 2 ;;
+    --role-name)   ROLE_NAME="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--bucket NAME] [--region REGION] [--iam-user NAME] [--repo \"owner/repo\"]"
+      echo "Usage: $0 [--bucket NAME] [--region REGION] [--repo \"owner/repo\"] [--role-name NAME]"
       echo ""
-      echo "  --bucket    S3 bucket name (must be globally unique)."
-      echo "              If omitted, prompts interactively."
-      echo "  --region    AWS region (default: us-east-1)."
-      echo "  --iam-user  IAM user name for CI uploads (default: valkey-ci-uploader)."
-      echo "  --repo      GitHub repo (owner/repo) to store secrets in."
-      echo "              If omitted, skips GitHub secret storage."
+      echo "  --bucket      S3 bucket name (must be globally unique)."
+      echo "                If omitted, prompts interactively."
+      echo "  --region      AWS region (default: us-east-1)."
+      echo "  --repo        GitHub repo (owner/repo) for OIDC trust and secret storage."
+      echo "  --role-name   IAM role name (default: GitHubActions-ValkeyPackages)."
       exit 0
       ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -122,18 +121,64 @@ aws s3api put-bucket-policy --bucket "$BUCKET" --policy "$POLICY"
 echo "Public-read bucket policy applied."
 
 ############################################################################
-# Step 4: Create IAM user with upload permissions
+# Step 4: Create OIDC provider and IAM role for GitHub Actions
 ############################################################################
 echo ""
-echo "=== Step 4: Create IAM user '${IAM_USER}' ==="
+echo "=== Step 4: Create OIDC provider and IAM role ==="
 
-if aws iam get-user --user-name "$IAM_USER" &>/dev/null; then
-  echo "IAM user '${IAM_USER}' already exists, skipping creation."
+# Create GitHub OIDC identity provider (idempotent — ignores if exists)
+OIDC_PROVIDER_ARN="arn:aws:iam::${AWS_ACCOUNT}:oidc-provider/token.actions.githubusercontent.com"
+if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_PROVIDER_ARN" &>/dev/null; then
+  echo "GitHub OIDC provider already exists, skipping."
 else
-  aws iam create-user --user-name "$IAM_USER"
-  echo "IAM user '${IAM_USER}' created."
+  THUMBPRINT="6938fd4d98bab03faadb97b34396831e3780aea1"
+  aws iam create-open-id-connect-provider \
+    --url "https://token.actions.githubusercontent.com" \
+    --client-id-list "sts.amazonaws.com" \
+    --thumbprint-list "$THUMBPRINT"
+  echo "GitHub OIDC identity provider created."
 fi
 
+# Determine OIDC subject filter
+if [ -n "$REPO" ]; then
+  OIDC_SUBJECT="repo:${REPO}:*"
+else
+  read -rp "GitHub repo (owner/repo) for OIDC trust: " REPO
+  OIDC_SUBJECT="repo:${REPO}:*"
+fi
+
+# Create IAM role with trust policy for GitHub OIDC
+TRUST_POLICY=$(cat <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {
+      "Federated": "arn:aws:iam::${AWS_ACCOUNT}:oidc-provider/token.actions.githubusercontent.com"
+    },
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {
+      "StringEquals": {
+        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+      },
+      "StringLike": {
+        "token.actions.githubusercontent.com:sub": "${OIDC_SUBJECT}"
+      }
+    }
+  }]
+}
+EOF
+)
+
+if aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
+  echo "IAM role '${ROLE_NAME}' already exists, updating trust policy."
+  aws iam update-assume-role-policy --role-name "$ROLE_NAME" --policy-document "$TRUST_POLICY"
+else
+  aws iam create-role --role-name "$ROLE_NAME" --assume-role-policy-document "$TRUST_POLICY"
+  echo "IAM role '${ROLE_NAME}' created."
+fi
+
+# Attach S3 upload permissions to the role
 UPLOAD_POLICY=$(cat <<EOF
 {
   "Version": "2012-10-17",
@@ -156,32 +201,20 @@ EOF
 )
 
 POLICY_NAME="valkey-s3-upload-${BUCKET}"
-aws iam put-user-policy \
-  --user-name "$IAM_USER" \
+aws iam put-role-policy \
+  --role-name "$ROLE_NAME" \
   --policy-name "$POLICY_NAME" \
   --policy-document "$UPLOAD_POLICY"
-echo "Upload policy '${POLICY_NAME}' attached."
+echo "Upload policy '${POLICY_NAME}' attached to role."
+
+ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
+echo "Role ARN: ${ROLE_ARN}"
 
 ############################################################################
-# Step 5: Generate access keys
-############################################################################
-echo ""
-echo "=== Step 5: Generate access keys ==="
-
-KEY_OUTPUT=$(aws iam create-access-key --user-name "$IAM_USER" --output json)
-ACCESS_KEY_ID=$(echo "$KEY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['AccessKey']['AccessKeyId'])")
-SECRET_ACCESS_KEY=$(echo "$KEY_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['AccessKey']['SecretAccessKey'])")
-
-echo "Access Key ID:     ${ACCESS_KEY_ID}"
-echo "Secret Access Key: ${SECRET_ACCESS_KEY}"
-echo ""
-echo "IMPORTANT: Save the Secret Access Key now — it cannot be retrieved again."
-
-############################################################################
-# Step 6: Verify public access
+# Step 5: Verify public access
 ############################################################################
 echo ""
-echo "=== Step 6: Verify public access ==="
+echo "=== Step 5: Verify public access ==="
 
 TEST_KEY="__setup-test-${RANDOM}.txt"
 echo -n "test" > "/tmp/${TEST_KEY}"
@@ -201,28 +234,23 @@ else
 fi
 
 ############################################################################
-# Step 7: Store secrets in GitHub (optional)
+# Step 6: Store secrets in GitHub (optional)
 ############################################################################
 if [ -n "$REPO" ]; then
   echo ""
-  echo "=== Step 7: Store secrets in GitHub ==="
+  echo "=== Step 6: Store secrets in GitHub ==="
 
   if ! command -v gh &>/dev/null; then
     echo "WARNING: gh CLI not found, skipping GitHub secret storage."
     echo "Store these secrets manually in your repo settings:"
     echo "  S3_BUCKET=${BUCKET}"
     echo "  S3_REGION=${REGION}"
-    echo "  AWS_ROLE_TO_ASSUME=<your OIDC role ARN>"
-    echo ""
-    echo "NOTE: packages.yml uses OIDC (aws-actions/configure-aws-credentials)"
-    echo "instead of long-lived access keys. See README.md for OIDC role setup."
+    echo "  AWS_ROLE_TO_ASSUME=${ROLE_ARN}"
   else
     gh secret set S3_BUCKET --body "$BUCKET" --repo "$REPO"
     gh secret set S3_REGION --body "$REGION" --repo "$REPO"
-    echo "S3_BUCKET and S3_REGION stored in ${REPO}."
-    echo ""
-    echo "NOTE: You must also set AWS_ROLE_TO_ASSUME with your OIDC role ARN."
-    echo "See README.md for OIDC identity provider and IAM role setup."
+    gh secret set AWS_ROLE_TO_ASSUME --body "$ROLE_ARN" --repo "$REPO"
+    echo "S3_BUCKET, S3_REGION, and AWS_ROLE_TO_ASSUME stored in ${REPO}."
   fi
 fi
 
@@ -237,8 +265,8 @@ echo ""
 echo "  Bucket:          ${BUCKET}"
 echo "  Region:          ${REGION}"
 echo "  URL:             ${BUCKET_URL}"
-echo "  IAM User:        ${IAM_USER}"
-echo "  Access Key ID:   ${ACCESS_KEY_ID}"
+echo "  IAM Role:        ${ROLE_NAME}"
+echo "  Role ARN:        ${ROLE_ARN}"
 echo ""
 echo "Package managers will use:"
 echo "  ${BUCKET_URL}/valkey-9.0/rpm/el9/x86_64/  (example RPM repo)"
@@ -248,6 +276,6 @@ if [ -z "$REPO" ]; then
   echo "To store secrets in GitHub, run:"
   echo "  gh secret set S3_BUCKET --body \"${BUCKET}\" --repo owner/repo"
   echo "  gh secret set S3_REGION --body \"${REGION}\" --repo owner/repo"
-  echo "  gh secret set AWS_ROLE_TO_ASSUME --body \"<oidc-role-arn>\" --repo owner/repo"
+  echo "  gh secret set AWS_ROLE_TO_ASSUME --body \"${ROLE_ARN}\" --repo owner/repo"
   echo ""
 fi
