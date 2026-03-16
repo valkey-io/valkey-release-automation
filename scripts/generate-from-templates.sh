@@ -40,6 +40,13 @@ if [ "$MAJOR_VERSION" -lt 8 ]; then
   exit 0
 fi
 
+# Determine extra build flags based on version
+# USE_FAST_FLOAT is supported in Valkey 8.1+
+EXTRA_BUILD_FLAGS=""
+if [ "$MAJOR_VERSION" -gt 8 ] || { [ "$MAJOR_VERSION" -eq 8 ] && [ "$MINOR" -ge 1 ]; }; then
+  EXTRA_BUILD_FLAGS=" USE_FAST_FLOAT=yes"
+fi
+
 echo "Generating ${TYPE} files for Valkey ${VERSION} (major=${MAJOR_VERSION}, doc=${DOC_VERSION})"
 
 if [ "$TYPE" = "deb" ]; then
@@ -53,7 +60,8 @@ if [ "$TYPE" = "deb" ]; then
 
   # Process rules template
   if [ -f "${TEMPLATES_DIR}/rules.template" ]; then
-    sed "s/@@DOC_VERSION@@/${DOC_VERSION}/g" \
+    sed -e "s/@@DOC_VERSION@@/${DOC_VERSION}/g" \
+        -e "s/@@EXTRA_BUILD_FLAGS@@/${EXTRA_BUILD_FLAGS}/g" \
       "${TEMPLATES_DIR}/rules.template" > "${OUTPUT_DIR}/rules"
     chmod +x "${OUTPUT_DIR}/rules"
     echo "  Generated: rules"
@@ -89,6 +97,12 @@ elif [ "$TYPE" = "rpm" ]; then
     # Use a temp file for multi-step sed to avoid issues with special chars
     TMPFILE=$(mktemp)
 
+    # For RPM, EXTRA_BUILD_FLAGS needs a leading backslash-newline if non-empty
+    RPM_EXTRA_FLAGS=""
+    if [ -n "$EXTRA_BUILD_FLAGS" ]; then
+      RPM_EXTRA_FLAGS=" \\\\\n    ${EXTRA_BUILD_FLAGS# }"
+    fi
+
     sed \
       -e "s/@@MAJOR_VERSION@@/${MAJOR_VERSION}/g" \
       -e "s/@@MINOR@@/${MINOR}/g" \
@@ -96,6 +110,7 @@ elif [ "$TYPE" = "rpm" ]; then
       -e "s/@@BUNDLED_DEP_NAME@@/${BUNDLED_DEP_NAME}/g" \
       -e "s|@@BUNDLED_DEP_PROVIDES@@|${BUNDLED_DEP_PROVIDES}|g" \
       -e "s/@@BUNDLED_DEP_DIR@@/${BUNDLED_DEP_DIR}/g" \
+      -e "s|@@EXTRA_BUILD_FLAGS@@|${RPM_EXTRA_FLAGS}|g" \
       "${TEMPLATES_DIR}/valkey.spec.template" > "$TMPFILE"
 
     # Replace @@CHANGELOG@@ with actual changelog content

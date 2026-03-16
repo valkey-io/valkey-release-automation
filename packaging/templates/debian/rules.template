@@ -28,7 +28,7 @@ override_dh_auto_clean:
 	rm -rf valkey-doc-$(VALKEY_DOC_VERSION) valkey-doc-$(VALKEY_DOC_VERSION).tar.gz
 
 override_dh_auto_build:
-	dh_auto_build -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEMD=yes USE_JEMALLOC=yes
+	dh_auto_build -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEMD=yes USE_JEMALLOC=yes@@EXTRA_BUILD_FLAGS@@
 
 # Build documentation if not nodoc profile
 ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
