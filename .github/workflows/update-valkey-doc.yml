@@ -22,7 +22,9 @@ jobs:
           PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
           MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
           
-          if [[ "$PATCH" != "0" ]]; then
+          if [[ "$VERSION" == *"-rc"* ]]; then
+            echo "is_major_minor=false" >> $GITHUB_OUTPUT
+          elif [[ "$PATCH" != "0" ]]; then
             echo "is_major_minor=false" >> $GITHUB_OUTPUT
           else
             echo "is_major_minor=true" >> $GITHUB_OUTPUT
