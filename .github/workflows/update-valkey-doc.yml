@@ -110,6 +110,7 @@ jobs:
           branch: update-docs-${{ inputs.version }}
           commit-message: "Update documentation for Valkey ${{ inputs.version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
+          delete-branch: true
           signoff: true
           author: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
           title: "Update documentation for Valkey ${{ inputs.version }}"
