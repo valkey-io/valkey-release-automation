@@ -24,7 +24,8 @@ apt-get install -y \
   tar \
   gzip \
   lsb-release
-
+apt-get -y install pkg-config || true
+apt-get -y install pkgconf || true
 # Critical build dependencies — hard-fail if any of these are missing.
 # These are required to produce correct, working binaries.
 echo "Installing critical build dependencies..."
