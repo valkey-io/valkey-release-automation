@@ -13,7 +13,7 @@ Build-Depends:
  lua-bitop-dev,
  lua-cjson-dev,
  openssl <!nocheck>,
- pkgconf,
+ pkg-config | pkgconf,
  procps <!nocheck>,
  tcl <!nocheck>,
  tcl-tls <!nocheck>,
