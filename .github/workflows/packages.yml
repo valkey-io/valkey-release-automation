@@ -351,7 +351,23 @@ jobs:
           CONTAINER_NAME="test-deb-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
           # Phase 1: Install systemd prerequisites in a plain container.
-          # This avoids racing with systemd for package manager locks.
+          # Debian/Ubuntu minimal images don't ship /sbin/init, so we start
+          # with "sleep infinity" first, install systemd, then recreate with /sbin/init.
+          docker run -d \
+            --name "${CONTAINER_NAME}-setup" \
+            --platform="$DOCKER_PLATFORM" \
+            ${{ matrix.platform.container }} \
+            sleep infinity
+
+          echo "Installing systemd prerequisites..."
+          docker exec "${CONTAINER_NAME}-setup" bash -c \
+            'apt-get update && apt-get install -y systemd systemd-sysv procps iproute2'
+
+          # Commit the container with systemd installed to a temporary image
+          docker commit "${CONTAINER_NAME}-setup" "${CONTAINER_NAME}-img"
+          docker rm -f "${CONTAINER_NAME}-setup" >/dev/null 2>&1
+
+          # Phase 2: Start a new container from the committed image with /sbin/init
           docker create \
             --name "$CONTAINER_NAME" \
             --cap-add SYS_ADMIN \
@@ -361,18 +377,9 @@ jobs:
             --cgroupns=host \
             --tmpfs /run \
             --tmpfs /run/lock \
-            ${{ matrix.platform.container }} \
+            "${CONTAINER_NAME}-img" \
             /sbin/init
 
-          docker start "$CONTAINER_NAME"
-
-          echo "Installing systemd prerequisites..."
-          docker exec "$CONTAINER_NAME" bash -c \
-            'apt-get update && apt-get install -y systemd systemd-sysv procps iproute2'
-
-          # Phase 2: Restart with systemd as PID 1.
-          # Prerequisites are already installed so no package manager runs.
-          docker stop "$CONTAINER_NAME" >/dev/null 2>&1
           docker start "$CONTAINER_NAME"
 
           echo "Waiting for systemd to initialize..."
@@ -410,6 +417,7 @@ jobs:
           # Cleanup
           docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
           docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rmi "${CONTAINER_NAME}-img" >/dev/null 2>&1 || true
 
           exit $TEST_EXIT
 
