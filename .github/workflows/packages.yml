@@ -235,29 +235,21 @@ jobs:
           VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
           CONTAINER_NAME="test-rpm-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
-          # Phase 1: Install systemd prerequisites in a plain container.
-          # This avoids racing with systemd for package manager locks.
-          # --privileged is needed for systemd service hardening features
-          # (PrivateTmp, ProtectHome, etc.) which require mount namespacing.
-          docker create \
-            --name "$CONTAINER_NAME" \
-            --privileged \
+          # Phase 1: Install systemd in a plain container.
+          # Minimal container images don't ship /sbin/init, so start with
+          # "sleep infinity", install systemd, commit, then recreate with /sbin/init.
+          docker run -d \
+            --name "${CONTAINER_NAME}-setup" \
             --platform="$DOCKER_PLATFORM" \
-            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-            --cgroupns=host \
-            --tmpfs /run \
-            --tmpfs /run/lock \
             ${{ matrix.platform.container }} \
-            /sbin/init
-
-          docker start "$CONTAINER_NAME"
+            sleep infinity
 
           echo "Installing systemd prerequisites..."
           if [ "${{ matrix.platform.family }}" = "suse" ]; then
-            docker exec "$CONTAINER_NAME" bash -c \
+            docker exec "${CONTAINER_NAME}-setup" bash -c \
               'zypper -n install -y systemd procps iproute2 2>/dev/null'
           else
-            docker exec "$CONTAINER_NAME" bash -c '
+            docker exec "${CONTAINER_NAME}-setup" bash -c '
               if command -v dnf5 &>/dev/null; then
                 dnf5 install -y systemd procps-ng iproute
               elif command -v dnf &>/dev/null; then
@@ -275,9 +267,24 @@ jobs:
             '
           fi
 
-          # Phase 2: Restart with systemd as PID 1.
-          # Prerequisites are already installed so no package manager runs.
-          docker stop "$CONTAINER_NAME" >/dev/null 2>&1
+          # Commit the container with systemd installed to a temporary image
+          docker commit "${CONTAINER_NAME}-setup" "${CONTAINER_NAME}-img"
+          docker rm -f "${CONTAINER_NAME}-setup" >/dev/null 2>&1
+
+          # Phase 2: Start a new container from the committed image with /sbin/init.
+          # --privileged is needed for systemd service hardening features
+          # (PrivateTmp, ProtectHome, etc.) which require mount namespacing.
+          docker create \
+            --name "$CONTAINER_NAME" \
+            --privileged \
+            --platform="$DOCKER_PLATFORM" \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --cgroupns=host \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            "${CONTAINER_NAME}-img" \
+            /sbin/init
+
           docker start "$CONTAINER_NAME"
 
           echo "Waiting for systemd to initialize..."
@@ -315,6 +322,7 @@ jobs:
           # Cleanup
           docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
           docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rmi "${CONTAINER_NAME}-img" >/dev/null 2>&1 || true
 
           exit $TEST_EXIT
 
