@@ -1,0 +1,57 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Thu, 16 Nov 2017 03:40:26 +0900
+Subject: Use get_current_dir_name over PATHMAX, etc.
+
+Last-Update: 29-10-2024
+---
+ src/rdb.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/rdb.c b/src/rdb.c
+index 07c6af6..e3d9d34 100644
+--- a/src/rdb.c
++++ b/src/rdb.c
+@@ -1492,7 +1492,6 @@ werr: /* Write error. */
+ }
+ 
+ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int rdbflags) {
+-    char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
+     rio rdb;
+     int error = 0;
+     int saved_errno;
+@@ -1502,11 +1501,12 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int
+     if (!fp) {
+         saved_errno = errno;
+         char *str_err = strerror(errno);
+-        char *cwdp = getcwd(cwd, MAXPATHLEN);
++        char *cwdp = get_current_dir_name();
+         serverLog(LL_WARNING,
+                   "Failed opening the temp RDB file %s (in server root dir %s) "
+                   "for saving: %s",
+                   filename, cwdp ? cwdp : "unknown", str_err);
++        zfree(cwdp);
+         errno = saved_errno;
+         return C_ERR;
+     }
+@@ -1572,7 +1572,6 @@ int rdbSaveToFile(const char *filename) {
+ /* Save the DB on disk. Return C_ERR on error, C_OK on success. */
+ int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
+     char tmpfile[256];
+-    char cwd[MAXPATHLEN]; /* Current working dir path for error messages. */
+ 
+     startSaving(rdbflags);
+     snprintf(tmpfile, 256, "temp-%d.rdb", (int)getpid());
+@@ -1586,11 +1585,12 @@ int rdbSave(int req, char *filename, rdbSaveInfo *rsi, int rdbflags) {
+      * if the generate DB file is ok. */
+     if (rename(tmpfile, filename) == -1) {
+         char *str_err = strerror(errno);
+-        char *cwdp = getcwd(cwd, MAXPATHLEN);
++        char *cwdp = get_current_dir_name();
+         serverLog(LL_WARNING,
+                   "Error moving temp DB file %s on the final "
+                   "destination %s (in server root dir %s): %s",
+                   tmpfile, filename, cwdp ? cwdp : "unknown", str_err);
++        zfree(cwdp);
+         unlink(tmpfile);
+         stopSaving(0);
+         return C_ERR;
