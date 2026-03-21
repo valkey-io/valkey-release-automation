@@ -237,10 +237,11 @@ jobs:
 
           # Phase 1: Install systemd prerequisites in a plain container.
           # This avoids racing with systemd for package manager locks.
+          # --privileged is needed for systemd service hardening features
+          # (PrivateTmp, ProtectHome, etc.) which require mount namespacing.
           docker create \
             --name "$CONTAINER_NAME" \
-            --cap-add SYS_ADMIN \
-            --security-opt seccomp=unconfined \
+            --privileged \
             --platform="$DOCKER_PLATFORM" \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             --cgroupns=host \
