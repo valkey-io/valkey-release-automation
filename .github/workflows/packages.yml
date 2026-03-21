@@ -360,18 +360,24 @@ jobs:
             sleep infinity
 
           echo "Installing systemd prerequisites..."
-          docker exec "${CONTAINER_NAME}-setup" bash -c \
-            'apt-get update && apt-get install -y systemd systemd-sysv procps iproute2'
+          docker exec "${CONTAINER_NAME}-setup" bash -c '
+            apt-get update && apt-get install -y systemd systemd-sysv procps iproute2
+            # Mask units that interfere with container operation
+            mkdir -p /etc/systemd/system
+            ln -sf /dev/null /etc/systemd/system/apt-daily.timer 2>/dev/null || true
+            ln -sf /dev/null /etc/systemd/system/apt-daily-upgrade.timer 2>/dev/null || true
+          '
 
           # Commit the container with systemd installed to a temporary image
           docker commit "${CONTAINER_NAME}-setup" "${CONTAINER_NAME}-img"
           docker rm -f "${CONTAINER_NAME}-setup" >/dev/null 2>&1
 
-          # Phase 2: Start a new container from the committed image with /sbin/init
+          # Phase 2: Start a new container from the committed image with /sbin/init.
+          # --privileged is required for systemd v257+ (Debian 13+) which enforces
+          # stricter cgroup and security constraints.
           docker create \
             --name "$CONTAINER_NAME" \
-            --cap-add SYS_ADMIN \
-            --security-opt seccomp=unconfined \
+            --privileged \
             --platform="$DOCKER_PLATFORM" \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             --cgroupns=host \
