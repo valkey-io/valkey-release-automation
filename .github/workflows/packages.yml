@@ -247,7 +247,7 @@ jobs:
           echo "Installing systemd prerequisites..."
           if [ "${{ matrix.platform.family }}" = "suse" ]; then
             docker exec "${CONTAINER_NAME}-setup" bash -c \
-              'zypper -n install -y systemd procps iproute2 2>/dev/null'
+              'zypper -n install -y systemd systemd-sysvinit procps iproute2 2>/dev/null'
           else
             docker exec "${CONTAINER_NAME}-setup" bash -c '
               if command -v dnf5 &>/dev/null; then
@@ -266,6 +266,13 @@ jobs:
               ln -sf /dev/null /etc/systemd/system/dnf5-makecache.service 2>/dev/null || true
             '
           fi
+
+          # Ensure /sbin/init exists — some distros don't create it automatically
+          docker exec "${CONTAINER_NAME}-setup" bash -c '
+            if [ ! -e /sbin/init ]; then
+              ln -sf /usr/lib/systemd/systemd /sbin/init
+            fi
+          '
 
           # Commit the container with systemd installed to a temporary image
           docker commit "${CONTAINER_NAME}-setup" "${CONTAINER_NAME}-img"
