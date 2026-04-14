@@ -26,9 +26,9 @@ mkdir -p "${SITE_DIR}"
 ################################################################################
 # Detect available versions from S3 bucket
 ################################################################################
-echo "Listing versions from s3://${S3_BUCKET}/..."
+echo "Listing versions from s3://${S3_BUCKET}/packaging/..."
 AVAILABLE_VERSIONS=""
-S3_DIRS=$(aws s3 ls "s3://${S3_BUCKET}/" --region "$S3_REGION" 2>/dev/null | awk '/PRE valkey-/ {gsub(/PRE /,""); gsub(/\//,""); print}') || true
+S3_DIRS=$(aws s3 ls "s3://${S3_BUCKET}/packaging/" --region "$S3_REGION" 2>/dev/null | awk '/PRE valkey-/ {gsub(/PRE /,""); gsub(/\//,""); print}') || true
 
 for vdir in $S3_DIRS; do
   ver="${vdir#valkey-}"
