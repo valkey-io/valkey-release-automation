@@ -539,7 +539,7 @@ jobs:
       - name: Generate site
         run: |
           PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
-          REPO_URL="https://${{ secrets.S3_BUCKET }}.s3.${{ secrets.S3_REGION }}.amazonaws.com"
+          REPO_URL="https://download.valkey.io/packaging"
           bash scripts/publish-repos.sh \
             "${{ needs.process-inputs.outputs.version }}" \
             "${{ steps.gpg.outputs.fingerprint }}" \
@@ -696,6 +696,6 @@ jobs:
           echo "Artifacts are available for download in the Actions tab." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
-          REPO_URL="https://${{ secrets.S3_BUCKET }}.s3.${{ secrets.S3_REGION }}.amazonaws.com"
+          REPO_URL="https://download.valkey.io/packaging"
           echo ":package: **Package repository (S3):** ${REPO_URL}" >> $GITHUB_STEP_SUMMARY
           echo ":globe_with_meridians: **Install instructions:** [${PAGES_URL}](${PAGES_URL})" >> $GITHUB_STEP_SUMMARY
