@@ -1,0 +1,5 @@
+# Binary command man page (section 1)
+usr/share/man/man1/valkey-server.1.gz
+
+# Configuration file man page (section 5)
+usr/share/man/man5/valkey.conf.5.gz

@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# Check we can load/use the cjson extension.
+
+set -eu
+
+service valkey-server restart
+
+sleep 5
+
+valkey-cli EVAL 'cjson.decode("{}")' 0

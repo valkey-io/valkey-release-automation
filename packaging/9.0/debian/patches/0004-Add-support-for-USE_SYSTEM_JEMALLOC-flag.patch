@@ -1,0 +1,139 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 28 Apr 2025 15:45:49 -0300
+Subject: Add support for USE_SYSTEM_JEMALLOC flag.
+
+Last-Update: 30-01-2026
+Updated for Valkey 9.0.1 (libvalkey rename, line numbers, C preprocessor syntax fixed)
+---
+ deps/Makefile |  2 ++
+ src/Makefile  |  5 +++++
+ src/debug.c   |  4 ++++
+ src/object.c  |  4 ++++
+ src/sds.c     |  4 ++++
+ src/zmalloc.c | 11 +++++++++++
+ src/zmalloc.h |  4 ++++
+ 7 files changed, 34 insertions(+)
+
+diff --git a/deps/Makefile b/deps/Makefile
+index 72389de..6c5d8d7 100644
+--- a/deps/Makefile
++++ b/deps/Makefile
+@@ -30,7 +30,9 @@ distclean:
+ 	-(cd libvalkey && $(MAKE) clean) > /dev/null || true
+ 	-(cd linenoise && $(MAKE) clean) > /dev/null || true
+ 	-(cd lua && $(MAKE) clean) > /dev/null || true
++ifneq ($(USE_SYSTEM_JEMALLOC),yes)
+ 	-(cd jemalloc && [ -f Makefile ] && $(MAKE) distclean) > /dev/null || true
++endif
+ 	-(cd hdr_histogram && $(MAKE) clean) > /dev/null || true
+ 	-(cd fpconv && $(MAKE) clean) > /dev/null || true
+ 	-(cd fast_float_c_interface && $(MAKE) clean) > /dev/null || true
+diff --git a/src/Makefile b/src/Makefile
+index ac88fc0..8aefc33 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -289,10 +289,15 @@ ifeq ($(MALLOC),tcmalloc_minimal)
+ endif
+ 
+ ifeq ($(MALLOC),jemalloc)
++ifeq ($(USE_SYSTEM_JEMALLOC),yes)
++	FINAL_CFLAGS+= -DUSE_JEMALLOC -DUSE_SYSTEM_JEMALLOC -I/usr/include/jemalloc
++	FINAL_LIBS := -ljemalloc $(FINAL_LIBS)
++else
+ 	DEPENDENCY_TARGETS+= jemalloc
+ 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
+ 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+ endif
++endif
+ 
+ ifeq ($(USE_LTTNG),yes)
+ 	FINAL_CFLAGS+=-DUSE_LTTNG
+diff --git a/src/debug.c b/src/debug.c
+index 4a57cd4..88b37af 100644
+--- a/src/debug.c
++++ b/src/debug.c
+@@ -82,6 +82,10 @@ void bugReportEnd(int killViaSignal, int sig);
+ void logStackTrace(void *eip, int uplevel, int current_thread);
+ void sigalrmSignalHandler(int sig, siginfo_t *info, void *secret);
+ 
++#if defined(USE_JEMALLOC) && defined(USE_SYSTEM_JEMALLOC)
++#define je_mallctl mallctl
++#endif
++
+ /* ================================= Debugging ============================== */
+ 
+ /* Compute the sha1 of string at 's' with 'len' bytes long.
+diff --git a/src/object.c b/src/object.c
+index 9ddd412..d60d867 100644
+--- a/src/object.c
++++ b/src/object.c
+@@ -45,6 +45,10 @@
+ /* For objects with large embedded keys, we reserve space for an expire field,
+  * so if expire is set later, we don't need to reallocate the object. */
+ #define KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD 128
++#if defined(USE_JEMALLOC) && defined(USE_SYSTEM_JEMALLOC)
++#define je_mallctl mallctl
++#define je_malloc_stats_print malloc_stats_print
++#endif
+ 
+ /* ===================== Creation and parsing of objects ==================== */
+ 
+diff --git a/src/sds.c b/src/sds.c
+index 7843363..ea1551d 100644
+--- a/src/sds.c
++++ b/src/sds.c
+@@ -39,6 +39,10 @@
+ #include "sdsalloc.h"
+ #include "util.h"
+ 
++#ifdef USE_SYSTEM_JEMALLOC
++#define je_nallocx(size, flags) nallocx(size, flags)
++#endif
++
+ const char *SDS_NOINIT = "SDS_NOINIT";
+ 
+ int sdsHdrSize(char type) {
+diff --git a/src/zmalloc.c b/src/zmalloc.c
+index 24dd11a..5c8e17a 100644
+--- a/src/zmalloc.c
++++ b/src/zmalloc.c
+@@ -80,11 +80,22 @@ void zlibc_free(void *ptr) {
+ #define free(ptr) tc_free(ptr)
+ /* Explicitly override malloc/free etc when using jemalloc. */
+ #elif defined(USE_JEMALLOC)
++#ifdef USE_SYSTEM_JEMALLOC
++#define malloc(size) malloc(size)
++#define calloc(count,size) calloc(count,size)
++#define realloc(ptr,size) realloc(ptr,size)
++#define free(ptr) free(ptr)
++#define mallocx(size,flags) mallocx(size,flags)
++#define dallocx(ptr,flags) dallocx(ptr,flags)
++#define je_sdallocx(ptr,size,flags) sdallocx(ptr,size,flags)
++#define je_mallctl mallctl
++#else
+ #define malloc(size) je_malloc(size)
+ #define calloc(count, size) je_calloc(count, size)
+ #define realloc(ptr, size) je_realloc(ptr, size)
+ #define free(ptr) je_free(ptr)
+ #endif
++#endif
+ 
+ #define thread_local _Thread_local
+ 
+diff --git a/src/zmalloc.h b/src/zmalloc.h
+index 68b4df6..6bfab3d 100644
+--- a/src/zmalloc.h
++++ b/src/zmalloc.h
+@@ -53,7 +53,11 @@
+ #include <jemalloc/jemalloc.h>
+ #if (JEMALLOC_VERSION_MAJOR == 2 && JEMALLOC_VERSION_MINOR >= 1) || (JEMALLOC_VERSION_MAJOR > 2)
+ #define HAVE_MALLOC_SIZE 1
++#ifdef USE_SYSTEM_JEMALLOC
++#define zmalloc_size(p) malloc_usable_size(p)
++#else
+ #define zmalloc_size(p) je_malloc_usable_size(p)
++#endif
+ #else
+ #error "Newer version of jemalloc required"
+ #endif
+

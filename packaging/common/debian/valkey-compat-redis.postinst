@@ -1,0 +1,42 @@
+#!/bin/sh
+
+set -eu
+
+migrate_redis_to_valkey() {
+    # Only migrate if Redis config directory exists
+    if [ ! -d /etc/redis ]; then
+        return 0
+    fi
+
+    echo "Migrating Redis configuration to Valkey..."
+
+    # Copy configuration files if they exist and Valkey ones are still defaults
+    if [ -f /etc/redis/redis.conf ] && [ -d /etc/valkey ]; then
+        cp -p /etc/redis/redis.conf /etc/valkey/valkey.conf
+        echo "Copied /etc/redis/redis.conf to /etc/valkey/valkey.conf"
+    fi
+
+    if [ -f /etc/redis/sentinel.conf ] && [ -d /etc/valkey ]; then
+        cp -p /etc/redis/sentinel.conf /etc/valkey/sentinel.conf
+        echo "Copied /etc/redis/sentinel.conf to /etc/valkey/sentinel.conf"
+    fi
+
+    # Migrate data directory if it exists
+    if [ -d /var/lib/redis ] && [ -d /var/lib/valkey ]; then
+        if ls /var/lib/redis/* >/dev/null 2>&1; then
+            cp -a /var/lib/redis/* /var/lib/valkey/
+            echo "Copied Redis data from /var/lib/redis/ to /var/lib/valkey/"
+        fi
+    fi
+
+    echo "Migration complete. Review /etc/valkey/valkey.conf and /etc/valkey/sentinel.conf."
+    echo "Defaults are managed via /etc/default/valkey-server and /etc/default/valkey-sentinel."
+}
+
+if [ "$1" = "configure" ]; then
+    migrate_redis_to_valkey
+fi
+
+#DEBHELPER#
+
+exit 0

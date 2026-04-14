@@ -1,0 +1,318 @@
+Valkey Server
+==============
+
+1. cp -a /etc/valkey/default.conf.example /etc/valkey/instancename.conf
+
+We use the "cp -a" here, so that our permissions are preserved.
+In case you copied the file without the "-a"
+
+chown root:valkey  /etc/valkey/instancename.conf
+chmod u=rw,g=r,o= /etc/valkey/instancename.conf
+
+2. change at least pidfile, logfile and dir setting
+# the pid file *has* to match your config filename without the ".conf"
+
+pidfile /run/valkey/instancename.pid
+logfile /var/log/valkey/instancename.log
+dir /var/lib/valkey/instancename/
+
+If you want to run more than one instance you also have to change the
+socket path and/or the ip:port combination.
+ e.g. /run/valkey/instancename.sock
+
+Also make sure if you copy configurations from somewhere, that "daemonize"
+should be set to "no".
+
+3. create the database dir:
+$ install -d -o valkey -g valkey -m 0750 /var/lib/valkey/instancename/
+
+4. systemctl start valkey@instancename
+5. systemctl enable valkey@instancename
+
+6. To stop/restart all instances at the same time use:
+
+systemctl restart valkey.target
+systemctl stop valkey.target
+
+Valkey Sentinel
+================
+
+1. cp -a /etc/valkey/sentinel.conf.example /etc/valkey/sentinel-instancename.conf
+
+We use the "cp -a" here, so that our permissions are preserved.
+In case you copied the file without the "-a"
+
+chown root:valkey  /etc/valkey/sentinel-instancename.conf
+chmod u=rw,g=rw,o= /etc/valkey/sentinel-instancename.conf
+
+Please note that the sentinel config needs write permissions for the group.
+The chmod line differs from the line for the normal valkey server.
+
+2. change at least pidfile, logfile setting
+# the pid file *has* to match your config filename without the ".conf"
+
+pidfile /run/valkey/instancename.pid
+logfile /var/log/valkey/instancename.log
+
+If you want to run more than one instance you also have to change the
+socket path and/or the ip:port combination.
+ e.g. /run/valkey/instancename.sock
+
+Also make sure if you copy configurations from somewhere, that "daemonize"
+should be set to "no".
+
+4. systemctl start valkey-sentinel@instancename
+5. systemctl enable valkey-sentinel@instancename
+
+6. To stop/restart all instances at the same time use:
+
+systemctl restart valkey-sentinel.target
+systemctl stop valkey-sentinel.target
+
+Firewall Configuration
+======================
+
+To allow external connections to Valkey (default port 6379):
+
+$ firewall-cmd --permanent --add-port=6379/tcp
+$ firewall-cmd --reload
+
+For Valkey Sentinel (default port 26379):
+
+$ firewall-cmd --permanent --add-port=26379/tcp
+$ firewall-cmd --reload
+
+For specific zones:
+
+$ firewall-cmd --zone=public --permanent --add-port=6379/tcp
+$ firewall-cmd --zone=public --permanent --add-port=26379/tcp
+$ firewall-cmd --reload
+
+To check active firewall rules:
+
+$ firewall-cmd --list-ports
+
+For multiple instances on different ports:
+
+$ firewall-cmd --permanent --add-port=6379-6381/tcp
+$ firewall-cmd --reload
+
+SELinux Configuration
+=====================
+
+If SELinux is enabled (check with: getenforce), you may need to configure
+policies for Valkey.
+
+Check SELinux status:
+
+$ getenforce
+
+Allow Valkey to bind to custom ports:
+
+$ semanage port -a -t valkey_port_t -p tcp 6380
+$ semanage port -a -t valkey_port_t -p tcp 6381
+
+For Sentinel custom ports:
+
+$ semanage port -a -t valkey_port_t -p tcp 26380
+
+For custom data directories:
+
+$ semanage fcontext -a -t valkey_var_lib_t "/custom/data/path(/.*)?"
+$ restorecon -Rv /custom/data/path
+
+For custom log directories:
+
+$ semanage fcontext -a -t valkey_log_t "/custom/log/path(/.*)?"
+$ restorecon -Rv /custom/log/path
+
+Check for SELinux denials related to Valkey:
+
+$ ausearch -m avc -ts recent | grep valkey
+
+View all denials in the last hour:
+
+$ ausearch -m avc -ts recent
+
+If you need to generate a custom policy from denials:
+
+$ grep valkey /var/log/audit/audit.log | audit2allow -M myvalkey
+$ semodule -i myvalkey.pp
+
+List Valkey-related SELinux ports:
+
+$ semanage port -l | grep valkey
+
+Temporarily disable SELinux for testing (not recommended for production):
+
+$ setenforce 0
+
+Re-enable SELinux:
+
+$ setenforce 1
+
+Make SELinux permissive permanently (edit /etc/selinux/config):
+
+SELINUX=permissive
+
+Integration with Apache when using unix domain sockets
+=======================================================
+
+If you plan to use Valkey in combination with Apache, then you should
+add 'valkey' to apache group and set 'unixsocketperm 770':
+
+$ usermod -a -G valkey apache
+$ systemctl restart httpd
+
+then Apache is able to connect to Valkey socket.
+
+Note: On RHEL/CentOS/Oracle/Rocky/Alma Linux systems, the Apache user is
+'apache' and the service is 'httpd' (not 'wwwrun' and 'apache2' as on SUSE).
+
+If using SELinux, you may also need:
+
+$ setsebool -P httpd_can_network_connect 1
+
+To allow Apache to connect to Valkey via TCP socket.
+
+Migrating from Redis
+====================
+
+Migrating from Redis to Valkey is simple to execute. Just install the
+"valkey-compat-redis" package:
+
+$ dnf install valkey-compat-redis
+
+The scriptlet should automatically take care of the necessary transitions.
+
+For detailed migration steps, run:
+
+$ /usr/libexecdir/migrate_redis_to_valkey.bash
+
+This script will:
+- Check for existing Redis installation
+- Provide step-by-step migration instructions
+- Help with configuration, data, and service migration
+- Warn about data safety considerations
+
+Performance Tuning
+==================
+
+Kernel parameters are automatically configured via /etc/sysctl.d/00-valkey.conf:
+
+- vm.overcommit_memory = 1
+- net.core.somaxconn = 65535
+
+To apply manually:
+
+$ sysctl -p /etc/sysctl.d/00-valkey.conf
+
+Disable Transparent Huge Pages (THP):
+
+$ echo never > /sys/kernel/mm/transparent_hugepage/enabled
+
+To make persistent, add to /etc/default/grub:
+
+GRUB_CMDLINE_LINUX="... transparent_hugepage=never"
+
+Then regenerate grub config:
+
+$ grub2-mkconfig -o /boot/grub2/grub.cfg
+$ reboot
+
+Check THP status:
+
+$ cat /sys/kernel/mm/transparent_hugepage/enabled
+
+Troubleshooting
+===============
+
+Service won't start:
+
+$ journalctl -u valkey@instancename -n 50
+
+Common issues:
+- Port already in use (check with: ss -tlnp | grep 6379)
+- Permission denied on data/log directories
+- Invalid configuration syntax
+- SELinux denial (check: ausearch -m avc -ts recent | grep valkey)
+- Firewall blocking connections
+
+Connection refused:
+
+- Check if service is running: systemctl status valkey@instancename
+- Check bind address in config file
+- Verify firewall rules: firewall-cmd --list-ports
+- Check SELinux: getenforce
+- Test locally first: valkey-cli -h 127.0.0.1 ping
+
+SELinux is blocking Valkey:
+
+1. Check for denials: ausearch -m avc -ts recent | grep valkey
+2. Temporarily set to permissive: setenforce 0
+3. Test if it works
+4. If it works, create proper policy (see SELinux section above)
+5. Re-enable: setenforce 1
+
+Out of memory:
+
+- Set maxmemory in configuration: maxmemory 2gb
+- Choose eviction policy: maxmemory-policy allkeys-lru
+- Monitor: valkey-cli INFO memory
+
+Useful Commands
+===============
+
+Service management:
+$ systemctl status valkey@instancename
+$ systemctl restart valkey@instancename
+$ systemctl stop valkey@instancename
+
+Check what's listening:
+$ ss -tlnp | grep valkey
+$ ss -tlnp | grep 6379
+
+Connect to Valkey:
+$ valkey-cli                      # Connect to default (localhost:6379)
+$ valkey-cli -p 6380              # Connect to specific port
+$ valkey-cli -h remote.host       # Connect to remote host
+$ valkey-cli -a password          # With authentication
+$ valkey-cli -s /run/valkey/instancename.sock  # Unix socket
+
+Common operations:
+$ valkey-cli PING                 # Test connection
+$ valkey-cli INFO                 # Server information
+$ valkey-cli INFO memory          # Memory statistics
+$ valkey-cli CONFIG GET '*'       # Show all configuration
+$ valkey-cli DBSIZE               # Number of keys
+$ valkey-cli MONITOR              # Watch commands in real-time
+$ valkey-cli --latency            # Check latency
+$ valkey-cli --bigkeys            # Find big keys
+
+Check logs:
+$ journalctl -u valkey@instancename -f
+$ tail -f /var/log/valkey/instancename.log
+
+Backup:
+$ valkey-cli BGSAVE
+$ cp /var/lib/valkey/instancename/dump.rdb /backup/
+
+More Information
+================
+
+Website:       https://valkey.io
+Documentation: https://valkey.io/documentation/
+Commands:      https://valkey.io/commands/
+GitHub:        https://github.com/valkey-io/valkey
+
+Distribution Support
+====================
+
+Oracle Linux:  https://support.oracle.com/
+Rocky Linux:   https://rockylinux.org/support
+AlmaLinux:     https://almalinux.org/community/
+Amazon Linux:  https://aws.amazon.com/premiumsupport/
+Red Hat:       https://access.redhat.com/support/
+
+Community:     https://github.com/valkey-io/valkey/discussions
+Issues:        https://github.com/valkey-io/valkey/issues

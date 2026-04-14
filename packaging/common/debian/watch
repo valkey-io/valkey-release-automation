@@ -1,0 +1,4 @@
+version=4
+opts="dversionmangle=s/\+dfsg1//,repacksuffix=+dfsg1,filenamemangle=s%(?:.*?)?v?(\d[\d.]*@ARCHIVE_EXT@)%@PACKAGE@-$1%" \
+  https://github.com/valkey-io/valkey/tags \
+  (?:.*?/)?v?@ANY_VERSION@@ARCHIVE_EXT@

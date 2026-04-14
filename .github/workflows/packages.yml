@@ -1,0 +1,701 @@
+name: Build Valkey Packages (RPM + DEB)
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Valkey version to build packages for (e.g., 9.0.3)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Valkey version to build packages for (e.g., 9.0.3)'
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - '.github/workflows/packages.yml'
+      - '.github/package-platforms.json'
+      - 'packaging/**'
+      - 'scripts/build-rpm.sh'
+      - 'scripts/build-deb.sh'
+      - 'scripts/publish-to-s3.sh'
+      - 'scripts/publish-repos.sh'
+      - 'scripts/generate-from-templates.sh'
+      - 'scripts/test_packages.sh'
+
+jobs:
+  ############################################################################
+  # Process Inputs
+  ############################################################################
+  process-inputs:
+    name: Process Inputs
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      packaging_dir: ${{ steps.derive.outputs.packaging_dir }}
+      rpm_matrix: ${{ steps.matrix.outputs.rpm }}
+      deb_matrix: ${{ steps.matrix.outputs.deb }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          sparse-checkout: |
+            .github/package-platforms.json
+            packaging/*/debian/changelog
+          sparse-checkout-cone-mode: false
+
+      - name: Validate version and derive packaging directory
+        id: derive
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          # For pull_request triggers, detect version from the latest packaging changelog
+          if [ -z "$VERSION" ]; then
+            LATEST_DIR=$(ls -d packaging/[0-9]*/ 2>/dev/null | sort -V | tail -1)
+            if [ -n "$LATEST_DIR" ] && [ -f "${LATEST_DIR}debian/changelog" ]; then
+              VERSION=$(head -1 "${LATEST_DIR}debian/changelog" | sed 's/.*(\([^)]*\)).*/\1/' | sed 's/-.*//')
+              echo "No version input — detected ${VERSION} from ${LATEST_DIR}debian/changelog"
+            else
+              VERSION="8.1.1"
+              echo "No version input and no changelog found — using fallback ${VERSION}"
+            fi
+          fi
+
+          # Validate semver format: x.y.z or x.y.z-rcN
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "ERROR: Invalid version format '${VERSION}'."
+            echo "Expected: x.y.z or x.y.z-rcN (e.g., 9.0.3, 8.1.0-rc1)"
+            exit 1
+          fi
+
+          VERSION_WITHOUT_RC="${VERSION%%-*}"
+          MAJOR="${VERSION_WITHOUT_RC%%.*}"
+          MINOR_PART="${VERSION_WITHOUT_RC#*.}"
+          MINOR="${MINOR_PART%%.*}"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "packaging_dir=${MAJOR}.${MINOR}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+          echo "Packaging directory: ${MAJOR}.${MINOR}"
+
+      - name: Generate platform matrices
+        id: matrix
+        run: |
+          CONFIG=".github/package-platforms.json"
+          echo "rpm=$(jq -c '.rpm' "$CONFIG")" >> "$GITHUB_OUTPUT"
+          echo "deb=$(jq -c '.deb' "$CONFIG")" >> "$GITHUB_OUTPUT"
+
+  ############################################################################
+  # RPM Builds
+  ############################################################################
+  build-rpm:
+    name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    needs: process-inputs
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.process-inputs.outputs.rpm_matrix) }}
+
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Build RPM in container
+        run: |
+          DOCKER_PLATFORM="linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}"
+          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+
+          docker run --rm \
+            --platform="$DOCKER_PLATFORM" \
+            -e PLATFORM_FAMILY="${{ matrix.platform.family }}" \
+            -e PLATFORM_ID="${{ matrix.platform.id }}" \
+            -e EPEL_PACKAGE="${{ matrix.platform.epel }}" \
+            -e VALKEY_VERSION="${VALKEY_VERSION}" \
+            -e EXPECTED_ARCH="${{ matrix.arch }}" \
+            -v "${{ github.workspace }}/scripts:/scripts:ro" \
+            -v "${{ github.workspace }}/packaging/common/rpm:/packaging-common:ro" \
+            -v "${{ github.workspace }}/packaging/${{ needs.process-inputs.outputs.packaging_dir }}/rpm:/packaging-override:ro" \
+            -v "${{ github.workspace }}/packaging/templates/rpm:/packaging-templates:ro" \
+            -v "$(pwd)/output:/output" \
+            ${{ matrix.platform.container }} \
+            bash /scripts/build-rpm.sh
+
+      - name: List built packages
+        run: |
+          echo "Built packages:"
+          ls -lh output/
+
+      - name: Upload RPM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}
+          path: output/*.rpm
+          retention-days: 30
+
+  ############################################################################
+  # DEB Builds
+  ############################################################################
+  build-deb:
+    name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    needs: process-inputs
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.process-inputs.outputs.deb_matrix) }}
+
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up QEMU for cross-platform builds
+        if: matrix.arch == 'arm64' && runner.os == 'Linux' && runner.arch == 'X64'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+        with:
+          platforms: arm64
+
+      - name: Build DEB in container
+        run: |
+          DOCKER_PLATFORM="linux/${{ matrix.arch }}"
+          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+
+          docker run --rm \
+            --platform="$DOCKER_PLATFORM" \
+            -e PLATFORM_ID="${{ matrix.platform.id }}" \
+            -e PLATFORM_CODENAME="${{ matrix.platform.codename }}" \
+            -e VALKEY_VERSION="${VALKEY_VERSION}" \
+            -e EXPECTED_ARCH="${{ matrix.arch }}" \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "${{ github.workspace }}/scripts:/scripts:ro" \
+            -v "${{ github.workspace }}/packaging/common/debian:/packaging-common:ro" \
+            -v "${{ github.workspace }}/packaging/${{ needs.process-inputs.outputs.packaging_dir }}/debian:/packaging-override:ro" \
+            -v "${{ github.workspace }}/packaging/templates/debian:/packaging-templates:ro" \
+            -v "$(pwd)/output:/output" \
+            ${{ matrix.platform.container }} \
+            bash /scripts/build-deb.sh
+
+      - name: List built packages
+        run: |
+          echo "Built packages:"
+          ls -lh output/
+          echo ""
+          echo "Package details:"
+          for deb in output/*.deb; do
+            if [ -f "$deb" ]; then
+              echo "---"
+              echo "File: $(basename $deb)"
+              dpkg-deb --info "$deb" | grep -E "Package|Version|Architecture" || true
+            fi
+          done
+
+      - name: Upload DEB artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}
+          path: |
+            output/*.deb
+            output/*.ddeb
+            output/*.buildinfo
+            output/*.changes
+          retention-days: 30
+
+  ############################################################################
+  # RPM Package Tests (all platforms)
+  ############################################################################
+  test-rpm:
+    name: Test RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    needs: [process-inputs, build-rpm]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.process-inputs.outputs.rpm_matrix) }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download RPM artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}
+          path: packages
+
+      - name: List downloaded packages
+        run: |
+          echo "Downloaded packages for ${{ matrix.platform.name }} (${{ matrix.arch }}):"
+          ls -lh packages/
+
+      - name: Run package tests in Docker
+        run: |
+          DOCKER_PLATFORM="linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}"
+          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+          CONTAINER_NAME="test-rpm-${{ matrix.platform.id }}-${{ matrix.arch }}"
+
+          # Phase 1: Install systemd in a plain container.
+          # Minimal container images don't ship /sbin/init, so start with
+          # "sleep infinity", install systemd, commit, then recreate with /sbin/init.
+          docker run -d \
+            --name "${CONTAINER_NAME}-setup" \
+            --platform="$DOCKER_PLATFORM" \
+            ${{ matrix.platform.container }} \
+            sleep infinity
+
+          echo "Installing systemd prerequisites..."
+          if [ "${{ matrix.platform.family }}" = "suse" ]; then
+            docker exec "${CONTAINER_NAME}-setup" bash -c \
+              'zypper -n install -y systemd systemd-sysvinit procps iproute2 2>/dev/null'
+          else
+            docker exec "${CONTAINER_NAME}-setup" bash -c '
+              if command -v dnf5 &>/dev/null; then
+                dnf5 install -y systemd procps-ng iproute
+              elif command -v dnf &>/dev/null; then
+                dnf install -y systemd procps-ng iproute
+              else
+                yum install -y systemd procps-ng iproute
+              fi
+              # Mask makecache timers before systemd starts to prevent
+              # background cache operations from holding package manager locks
+              mkdir -p /etc/systemd/system
+              ln -sf /dev/null /etc/systemd/system/dnf-makecache.timer 2>/dev/null || true
+              ln -sf /dev/null /etc/systemd/system/dnf-makecache.service 2>/dev/null || true
+              ln -sf /dev/null /etc/systemd/system/dnf5-makecache.timer 2>/dev/null || true
+              ln -sf /dev/null /etc/systemd/system/dnf5-makecache.service 2>/dev/null || true
+            '
+          fi
+
+          # Ensure /sbin/init exists — some distros don't create it automatically
+          docker exec "${CONTAINER_NAME}-setup" bash -c '
+            if [ ! -e /sbin/init ]; then
+              ln -sf /usr/lib/systemd/systemd /sbin/init
+            fi
+          '
+
+          # Commit the container with systemd installed to a temporary image
+          docker commit "${CONTAINER_NAME}-setup" "${CONTAINER_NAME}-img"
+          docker rm -f "${CONTAINER_NAME}-setup" >/dev/null 2>&1
+
+          # Phase 2: Start a new container from the committed image with /sbin/init.
+          # --privileged is needed for systemd service hardening features
+          # (PrivateTmp, ProtectHome, etc.) which require mount namespacing.
+          docker create \
+            --name "$CONTAINER_NAME" \
+            --privileged \
+            --platform="$DOCKER_PLATFORM" \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --cgroupns=host \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            "${CONTAINER_NAME}-img" \
+            /sbin/init
+
+          docker start "$CONTAINER_NAME"
+
+          echo "Waiting for systemd to initialize..."
+          for i in $(seq 1 60); do
+            if docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; then
+              echo "systemd is ready (attempt $i)"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "WARNING: systemd did not reach running state within 60 seconds"
+              docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null || true
+              docker logs "$CONTAINER_NAME" 2>&1 | tail -20
+            fi
+            sleep 1
+          done
+
+          # Copy packages and test script into container
+          docker cp packages/. "$CONTAINER_NAME":/packages/
+          docker cp scripts/test_packages.sh "$CONTAINER_NAME":/test_packages.sh
+
+          # Run tests
+          echo ""
+          echo "============================================="
+          echo "Running tests on ${{ matrix.platform.name }} (${{ matrix.arch }})"
+          echo "Valkey version: $VALKEY_VERSION"
+          echo "============================================="
+          echo ""
+
+          docker exec "$CONTAINER_NAME" bash /test_packages.sh \
+            --pkg-dir=/packages \
+            --version="$VALKEY_VERSION"
+
+          TEST_EXIT=$?
+
+          # Cleanup
+          docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rmi "${CONTAINER_NAME}-img" >/dev/null 2>&1 || true
+
+          exit $TEST_EXIT
+
+  ############################################################################
+  # DEB Package Tests (all platforms)
+  ############################################################################
+  test-deb:
+    name: Test DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    needs: [process-inputs, build-deb]
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.process-inputs.outputs.deb_matrix) }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download DEB artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}
+          path: packages
+
+      - name: List downloaded packages
+        run: |
+          echo "Downloaded packages for ${{ matrix.platform.name }} (${{ matrix.arch }}):"
+          ls -lh packages/
+
+      - name: Run package tests in Docker
+        run: |
+          DOCKER_PLATFORM="linux/${{ matrix.arch }}"
+          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+          CONTAINER_NAME="test-deb-${{ matrix.platform.id }}-${{ matrix.arch }}"
+
+          # Phase 1: Install systemd prerequisites in a plain container.
+          # Debian/Ubuntu minimal images don't ship /sbin/init, so we start
+          # with "sleep infinity" first, install systemd, then recreate with /sbin/init.
+          docker run -d \
+            --name "${CONTAINER_NAME}-setup" \
+            --platform="$DOCKER_PLATFORM" \
+            ${{ matrix.platform.container }} \
+            sleep infinity
+
+          echo "Installing systemd prerequisites..."
+          docker exec "${CONTAINER_NAME}-setup" bash -c '
+            apt-get update && apt-get install -y systemd systemd-sysv procps iproute2
+            # Mask units that interfere with container operation
+            mkdir -p /etc/systemd/system
+            ln -sf /dev/null /etc/systemd/system/apt-daily.timer 2>/dev/null || true
+            ln -sf /dev/null /etc/systemd/system/apt-daily-upgrade.timer 2>/dev/null || true
+          '
+
+          # Commit the container with systemd installed to a temporary image
+          docker commit "${CONTAINER_NAME}-setup" "${CONTAINER_NAME}-img"
+          docker rm -f "${CONTAINER_NAME}-setup" >/dev/null 2>&1
+
+          # Phase 2: Start a new container from the committed image with /sbin/init.
+          # --privileged is required for systemd v257+ (Debian 13+) which enforces
+          # stricter cgroup and security constraints.
+          docker create \
+            --name "$CONTAINER_NAME" \
+            --privileged \
+            --platform="$DOCKER_PLATFORM" \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            --cgroupns=host \
+            --tmpfs /run \
+            --tmpfs /run/lock \
+            "${CONTAINER_NAME}-img" \
+            /sbin/init
+
+          docker start "$CONTAINER_NAME"
+
+          echo "Waiting for systemd to initialize..."
+          for i in $(seq 1 60); do
+            if docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"; then
+              echo "systemd is ready (attempt $i)"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "WARNING: systemd did not reach running state within 60 seconds"
+              docker exec "$CONTAINER_NAME" systemctl is-system-running 2>/dev/null || true
+              docker logs "$CONTAINER_NAME" 2>&1 | tail -20
+            fi
+            sleep 1
+          done
+
+          # Copy packages and test script into container
+          docker cp packages/. "$CONTAINER_NAME":/packages/
+          docker cp scripts/test_packages.sh "$CONTAINER_NAME":/test_packages.sh
+
+          # Run tests
+          echo ""
+          echo "============================================="
+          echo "Running tests on ${{ matrix.platform.name }} (${{ matrix.arch }})"
+          echo "Valkey version: $VALKEY_VERSION"
+          echo "============================================="
+          echo ""
+
+          docker exec "$CONTAINER_NAME" bash /test_packages.sh \
+            --pkg-dir=/packages \
+            --version="$VALKEY_VERSION"
+
+          TEST_EXIT=$?
+
+          # Cleanup
+          docker stop "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rm "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          docker rmi "${CONTAINER_NAME}-img" >/dev/null 2>&1 || true
+
+          exit $TEST_EXIT
+
+  ############################################################################
+  # Publish Packages to S3
+  ############################################################################
+  publish-to-s3:
+    name: Publish to S3
+    needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb]
+    runs-on: ubuntu-latest
+    if: success() && github.event_name != 'pull_request'
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update && sudo apt-get install -y createrepo-c dpkg-dev debsigs gpg rpm
+          pip install awscli
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
+        id: gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.S3_REGION }}
+
+      - name: Sign packages and upload to S3
+        run: |
+          bash scripts/publish-to-s3.sh \
+            "${{ needs.process-inputs.outputs.version }}" \
+            "${{ steps.gpg.outputs.fingerprint }}" \
+            artifacts \
+            "${{ secrets.S3_BUCKET }}" \
+            "${{ secrets.S3_REGION }}"
+
+  ############################################################################
+  # Deploy Install Instructions to GitHub Pages
+  ############################################################################
+  deploy-pages:
+    name: Deploy Pages
+    needs: [process-inputs, publish-to-s3]
+    runs-on: ubuntu-latest
+    if: success() && github.event_name != 'pull_request'
+    permissions:
+      id-token: write
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Checkout existing gh-pages content
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: gh-pages
+          path: site
+        continue-on-error: true
+
+      - name: Clean up site directory
+        run: |
+          mkdir -p site
+          cd site
+          # Remove non-Pages files (from bad orphan branch init)
+          rm -rf .git packaging scripts documents .github
+          rm -f README.md PACKAGING.md LICENSE
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
+        id: gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Install AWS CLI
+        run: pip install awscli
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.S3_REGION }}
+
+      - name: Generate site
+        run: |
+          PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          REPO_URL="https://${{ secrets.S3_BUCKET }}.s3.${{ secrets.S3_REGION }}.amazonaws.com"
+          bash scripts/publish-repos.sh \
+            "${{ needs.process-inputs.outputs.version }}" \
+            "${{ steps.gpg.outputs.fingerprint }}" \
+            "${REPO_URL}" \
+            "${PAGES_URL}" \
+            "${{ secrets.S3_BUCKET }}" \
+            "${{ secrets.S3_REGION }}" \
+            site \
+            scripts/pages
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          keep_files: true
+
+  ############################################################################
+  # Combined Summary
+  ############################################################################
+  build-summary:
+    name: Build Summary
+    needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb, publish-to-s3, deploy-pages]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Check build and test results
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          RPM_RESULT="${{ needs.build-rpm.result }}"
+          DEB_RESULT="${{ needs.build-deb.result }}"
+          RPM_TEST_RESULT="${{ needs.test-rpm.result }}"
+          DEB_TEST_RESULT="${{ needs.test-deb.result }}"
+          S3_RESULT="${{ needs.publish-to-s3.result }}"
+          PAGES_RESULT="${{ needs.deploy-pages.result }}"
+
+          echo "### Builds" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$RPM_RESULT" = "success" ]; then
+            echo "- :white_check_mark: All RPM builds completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- :x: Some RPM builds failed (status: $RPM_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$DEB_RESULT" = "success" ]; then
+            echo "- :white_check_mark: All DEB builds completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- :x: Some DEB builds failed (status: $DEB_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Package Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$RPM_TEST_RESULT" = "success" ]; then
+            echo "- :white_check_mark: All RPM package tests passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "$RPM_TEST_RESULT" = "skipped" ]; then
+            echo "- :warning: RPM package tests were skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- :x: Some RPM package tests failed (status: $RPM_TEST_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$DEB_TEST_RESULT" = "success" ]; then
+            echo "- :white_check_mark: All DEB package tests passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "$DEB_TEST_RESULT" = "skipped" ]; then
+            echo "- :warning: DEB package tests were skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- :x: Some DEB package tests failed (status: $DEB_TEST_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Publishing" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$S3_RESULT" = "success" ]; then
+            echo "- :white_check_mark: Packages published to S3" >> $GITHUB_STEP_SUMMARY
+          elif [ "$S3_RESULT" = "skipped" ]; then
+            echo "- :warning: S3 publishing was skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- :x: S3 publishing failed (status: $S3_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$PAGES_RESULT" = "success" ]; then
+            echo "- :white_check_mark: Install instructions deployed to GitHub Pages" >> $GITHUB_STEP_SUMMARY
+          elif [ "$PAGES_RESULT" = "skipped" ]; then
+            echo "- :warning: Pages deployment was skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- :x: Pages deployment failed (status: $PAGES_RESULT)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          FAILED=false
+          for result in "$RPM_RESULT" "$DEB_RESULT" "$RPM_TEST_RESULT" "$DEB_TEST_RESULT" "$S3_RESULT" "$PAGES_RESULT"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              FAILED=true
+            fi
+          done
+
+          if [ "$FAILED" = "true" ]; then
+            exit 1
+          fi
+
+      - name: Download all artifacts
+        if: success()
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: all-packages
+
+      - name: Generate artifact summary
+        if: success()
+        run: |
+          echo "## Built RPM Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Version | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|---------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          VERSION="${{ needs.process-inputs.outputs.version }}"
+
+          for dir in all-packages/valkey-rpms-*/; do
+            if [ -d "$dir" ]; then
+              artifact=$(basename "$dir" | sed 's/valkey-rpms-//')
+              arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
+              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
+              count=$(find "$dir" -name "*.rpm" -type f | wc -l)
+              size=$(du -sh "$dir" | cut -f1)
+              echo "| $platform | $arch | $VERSION | $count | $size |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Built DEB Packages" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Architecture | Version | Packages | Total Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------------|---------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in all-packages/valkey-debs-*/; do
+            if [ -d "$dir" ]; then
+              artifact=$(basename "$dir" | sed 's/valkey-debs-//')
+              arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
+              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
+              count=$(find "$dir" -name "*.deb" -type f | wc -l)
+              size=$(du -sh "$dir" | cut -f1)
+              echo "| $platform | $arch | $VERSION | $count | $size |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts are available for download in the Actions tab." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          REPO_URL="https://${{ secrets.S3_BUCKET }}.s3.${{ secrets.S3_REGION }}.amazonaws.com"
+          echo ":package: **Package repository (S3):** ${REPO_URL}" >> $GITHUB_STEP_SUMMARY
+          echo ":globe_with_meridians: **Install instructions:** [${PAGES_URL}](${PAGES_URL})" >> $GITHUB_STEP_SUMMARY

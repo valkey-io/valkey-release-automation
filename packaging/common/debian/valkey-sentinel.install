@@ -1,0 +1,2 @@
+etc/valkey/sentinel.conf
+usr/bin/valkey-sentinel

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+# Ensure the systemd daemon is reloaded to recognize new units
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+#DEBHELPER#
+
+exit 0

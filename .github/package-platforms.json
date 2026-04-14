@@ -1,0 +1,32 @@
+{
+  "rpm": {
+    "arch": ["x86_64", "aarch64"],
+    "platform": [
+      { "name": "openSUSE Leap 15.5", "container": "opensuse/leap:15.5", "id": "opensuse-15.5", "family": "suse", "epel": "none" },
+      { "name": "openSUSE Leap 15.6", "container": "opensuse/leap:15.6", "id": "opensuse-15.6", "family": "suse", "epel": "none" },
+      { "name": "Oracle Linux 8",     "container": "oraclelinux:8",      "id": "el8",          "family": "rhel", "epel": "oracle-epel-release-el8" },
+      { "name": "Oracle Linux 9",     "container": "oraclelinux:9",      "id": "el9",          "family": "rhel", "epel": "oracle-epel-release-el9" },
+      { "name": "Oracle Linux 10",    "container": "oraclelinux:10",     "id": "el10",         "family": "rhel", "epel": "oracle-epel-release-el10" },
+      { "name": "Rocky Linux 8",      "container": "rockylinux:8",       "id": "rocky8",       "family": "rhel", "epel": "epel-release" },
+      { "name": "Rocky Linux 9",      "container": "rockylinux:9",       "id": "rocky9",       "family": "rhel", "epel": "epel-release" },
+      { "name": "Rocky Linux 10",     "container": "rockylinux/rockylinux:10", "id": "rocky10", "family": "rhel", "epel": "epel-release" },
+      { "name": "AlmaLinux 8",        "container": "almalinux:8",        "id": "alma8",        "family": "rhel", "epel": "epel-release" },
+      { "name": "AlmaLinux 9",        "container": "almalinux:9",        "id": "alma9",        "family": "rhel", "epel": "epel-release" },
+      { "name": "AlmaLinux 10",       "container": "almalinux:10",       "id": "alma10",       "family": "rhel", "epel": "epel-release" },
+      { "name": "Amazon Linux 2023",  "container": "amazonlinux:2023",   "id": "amzn2023",     "family": "rhel", "epel": "none" },
+      { "name": "Fedora 39",          "container": "fedora:39",          "id": "fedora39",     "family": "rhel", "epel": "none" },
+      { "name": "Fedora 40",          "container": "fedora:40",          "id": "fedora40",     "family": "rhel", "epel": "none" },
+      { "name": "Fedora 41",          "container": "fedora:41",          "id": "fedora41",     "family": "rhel", "epel": "none" }
+    ]
+  },
+  "deb": {
+    "arch": ["amd64", "arm64"],
+    "platform": [
+      { "name": "Debian 11 (Bullseye)", "container": "debian:11",    "id": "debian11",   "codename": "bullseye" },
+      { "name": "Debian 12 (Bookworm)", "container": "debian:12",    "id": "debian12",   "codename": "bookworm" },
+      { "name": "Debian 13 (Trixie)",   "container": "debian:trixie","id": "debian13",   "codename": "trixie" },
+      { "name": "Ubuntu 22.04 (Jammy)", "container": "ubuntu:22.04", "id": "ubuntu2204", "codename": "jammy" },
+      { "name": "Ubuntu 24.04 (Noble)", "container": "ubuntu:24.04", "id": "ubuntu2404", "codename": "noble" }
+    ]
+  }
+}

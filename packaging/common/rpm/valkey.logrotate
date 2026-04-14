@@ -1,0 +1,11 @@
+/var/log/valkey/*.log
+/var/log/valkey/**/*.log {
+       weekly
+       rotate 10
+       copytruncate
+       delaycompress
+       compress
+       notifempty
+       missingok
+       su valkey valkey
+}

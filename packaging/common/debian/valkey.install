@@ -1,0 +1,13 @@
+usr/bin/valkey-*
+etc/sysusers.d/valkey.conf
+etc/logrotate.d/valkey
+lib/systemd/system/valkey.service
+lib/systemd/system/valkey.service.d/limit.conf
+lib/systemd/system/valkey-sentinel.service
+lib/systemd/system/valkey-sentinel.service.d/limit.conf
+var/lib/valkey/
+var/log/valkey/
+var/run/valkey/
+etc/sysconfig/valkey
+etc/sysconfig/valkey-sentinel
+etc/default/valkey

@@ -1,0 +1,19 @@
+Tests: 0001-valkey-cli
+Depends: valkey-server, valkey-tools
+Restrictions: needs-root
+
+Tests: 0002-benchmark
+Depends: valkey-server, valkey-tools
+Restrictions: needs-root
+
+Tests: 0003-valkey-check-aof
+Depends: valkey-tools
+Restrictions: needs-root
+
+Tests: 0004-valkey-check-rdb
+Depends: valkey-server, valkey-tools
+Restrictions: needs-root
+
+Tests: 0005-cjson
+Depends: valkey-server, valkey-tools
+Restrictions: needs-root
