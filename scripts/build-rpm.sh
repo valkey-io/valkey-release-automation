@@ -87,10 +87,17 @@ echo ""
 
 echo "::group::Setup RPM build environment"
 
-# Merge common + version-specific packaging files
+# Assemble packaging dir in three layers so version overrides win:
+#   1. common  — shared files (all versions)
+#   2. render  — template-generated valkey.spec from templates + override
+#   3. override — version-specific flat files from packaging/<version>/rpm/
+# The render step passes /packaging-override as --override-templates-dir so
+# that a version shipping its own valkey.spec.template (e.g. 9.1 for
+# libvalkeylua.so install + multilib fixup) wins over the shared template.
+# The final override copy also overlays any non-template flat files (like
+# valkey-conf.patch) from the version dir on top of common.
 mkdir -p /packaging
 cp -r /packaging-common/* /packaging/
-cp -r /packaging-override/* /packaging/
 PACKAGING_DIR="/packaging"
 
 # Generate files from templates if templates are mounted
@@ -100,7 +107,16 @@ if [ -d "/packaging-templates" ]; then
     --type rpm \
     --version "${VALKEY_VERSION}" \
     --templates-dir /packaging-templates \
+    --override-templates-dir /packaging-override \
     --output-dir "$PACKAGING_DIR"
+fi
+
+# Overlay version-specific flat files (e.g. valkey-conf.patch) after
+# templates are rendered. Template files themselves were already consumed
+# by the renderer above and should not overwrite generated output.
+if [ -d "/packaging-override" ]; then
+  find /packaging-override -mindepth 1 -maxdepth 1 ! -name '*.template' \
+       ! -name 'changelog-*' -exec cp -r {} /packaging/ \;
 fi
 
 # Verify packaging files are mounted
@@ -150,7 +166,8 @@ cp "$PACKAGING_DIR"/README.RHEL $BUILD_ROOT/SOURCES/ 2>/dev/null || echo "No REA
 
 # Override version fields in spec to match input version
 sed -i "s/^Version:.*/Version:        ${VALKEY_VERSION}/" $BUILD_ROOT/SPECS/valkey.spec
-DOC_VERSION=$(echo "${VALKEY_VERSION}" | sed "s/\.[0-9]*$/.0/")
+DOC_VERSION="${DOC_VERSION:-$(echo "${VALKEY_VERSION}" | sed "s/\.[0-9]*$/.0/")}"
+echo "Using doc version: ${DOC_VERSION}"
 sed -i "s/^%global doc_version.*/%global doc_version ${DOC_VERSION}/" $BUILD_ROOT/SPECS/valkey.spec
 
 echo "::endgroup::"
@@ -163,7 +180,18 @@ cd $BUILD_ROOT/SOURCES
 # Download main source if not present
 if [ ! -f "valkey-${VALKEY_VERSION}.tar.gz" ]; then
   echo "Downloading Valkey ${VALKEY_VERSION}..."
-  wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}/valkey-${VALKEY_VERSION}.tar.gz
+  if ! wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}/valkey-${VALKEY_VERSION}.tar.gz; then
+    # Tag not yet released — try the MAJOR.MINOR branch and repack
+    BRANCH_REF="${VALKEY_VERSION%.*}"
+    echo "Tag ${VALKEY_VERSION} not found, trying branch ${BRANCH_REF}..."
+    wget -q https://github.com/valkey-io/valkey/archive/refs/heads/${BRANCH_REF}.tar.gz
+    # GitHub branch archives extract to valkey-BRANCH; rpmbuild %setup expects valkey-VERSION
+    mkdir -p /tmp/repack
+    tar xzf ${BRANCH_REF}.tar.gz -C /tmp/repack
+    mv /tmp/repack/valkey-${BRANCH_REF} /tmp/repack/valkey-${VALKEY_VERSION}
+    tar czf valkey-${VALKEY_VERSION}.tar.gz -C /tmp/repack valkey-${VALKEY_VERSION}
+    rm -rf /tmp/repack ${BRANCH_REF}.tar.gz
+  fi
 fi
 
 # Extract doc_version from spec file

@@ -67,10 +67,17 @@ echo ""
 
 echo "::group::Prepare source and debian directory"
 
-# Merge common + version-specific packaging files
+# Assemble packaging dir in three layers so version overrides win:
+#   1. common  — shared files (all versions)
+#   2. render  — template-generated control/rules from templates + override
+#   3. override — version-specific flat files from packaging/<version>/debian/
+# The render step passes /packaging-override as --override-templates-dir so
+# that a version shipping its own rules.template / control.template (e.g.
+# 9.1 for libvalkeylua.so) wins over the shared template. The final
+# override copy also overlays any non-template flat files (like
+# valkey-server.install) from the version dir on top of common.
 mkdir -p /packaging
 cp -r /packaging-common/* /packaging/
-cp -r /packaging-override/* /packaging/
 PACKAGING_DIR="/packaging"
 
 # Generate files from templates if templates are mounted
@@ -80,7 +87,16 @@ if [ -d "/packaging-templates" ]; then
     --type deb \
     --version "${VALKEY_VERSION}" \
     --templates-dir /packaging-templates \
+    --override-templates-dir /packaging-override \
     --output-dir "$PACKAGING_DIR"
+fi
+
+# Overlay version-specific flat files (e.g. valkey-server.install for 9.1)
+# after templates are rendered. Template files themselves were already
+# consumed by the renderer above and should not overwrite generated output.
+if [ -d "/packaging-override" ]; then
+  find /packaging-override -mindepth 1 -maxdepth 1 ! -name '*.template' \
+       ! -name 'changelog-*' -exec cp -r {} /packaging/ \;
 fi
 
 # Verify packaging files are mounted
@@ -91,14 +107,30 @@ fi
 
 echo "✓ Found packaging files at: $PACKAGING_DIR"
 
-# Download Valkey source
-echo "Downloading Valkey ${VALKEY_VERSION}..."
+# Download Valkey source (skip if already present, e.g. pre-mounted)
 cd /root
-wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz
+if [ ! -f "valkey_${VALKEY_VERSION}.orig.tar.gz" ]; then
+  echo "Downloading Valkey ${VALKEY_VERSION}..."
+  if ! wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz; then
+    # Tag not yet released — try the MAJOR.MINOR branch and repack
+    BRANCH_REF="${VALKEY_VERSION%.*}"
+    echo "Tag ${VALKEY_VERSION} not found, trying branch ${BRANCH_REF}..."
+    wget -q https://github.com/valkey-io/valkey/archive/refs/heads/${BRANCH_REF}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz
+    # GitHub branch archives extract to valkey-BRANCH; dpkg expects valkey-VERSION
+    NEEDS_REPACK=1
+  fi
+else
+  echo "Using pre-existing valkey_${VALKEY_VERSION}.orig.tar.gz"
+fi
 
 # Extract source
 echo "Extracting source..."
 tar xzf valkey_${VALKEY_VERSION}.orig.tar.gz
+
+# Rename extracted dir if we fetched from a branch instead of a tag
+if [ "${NEEDS_REPACK:-}" = "1" ] && [ -d "valkey-${VALKEY_VERSION%.*}" ] && [ ! -d "valkey-${VALKEY_VERSION}" ]; then
+  mv "valkey-${VALKEY_VERSION%.*}" "valkey-${VALKEY_VERSION}"
+fi
 
 # Copy debian directory to extracted source
 echo "Copying debian directory from ${PACKAGING_DIR}..."
@@ -119,7 +151,8 @@ echo ""
 
 echo "::group::Override doc version in debian/rules"
 
-DOC_VERSION=$(echo "${VALKEY_VERSION}" | sed "s/\.[0-9]*$/.0/")
+DOC_VERSION="${DOC_VERSION:-$(echo "${VALKEY_VERSION}" | sed "s/\.[0-9]*$/.0/")}"
+echo "Using doc version: ${DOC_VERSION}"
 sed -i "s/^VALKEY_DOC_VERSION = .*/VALKEY_DOC_VERSION = ${DOC_VERSION}/" debian/rules
 
 echo "::endgroup::"
@@ -236,7 +269,12 @@ echo ""
 echo "::group::Build Debian packages"
 
 echo "Building packages for ${EXPECTED_ARCH}..."
-dpkg-buildpackage -b -us -uc -a${EXPECTED_ARCH}
+BUILD_PROFILES_FLAG=""
+if [ -n "${DEB_BUILD_PROFILES:-}" ]; then
+  BUILD_PROFILES_FLAG="-P${DEB_BUILD_PROFILES}"
+  echo "Build profiles: ${DEB_BUILD_PROFILES}"
+fi
+dpkg-buildpackage -b -us -uc -a${EXPECTED_ARCH} ${BUILD_PROFILES_FLAG}
 
 echo "::endgroup::"
 echo ""
