@@ -179,7 +179,6 @@ jobs:
       - process-inputs
       - update-valkey-hashes
       - update-valkey-container
-      - update-try-valkey
     if: needs.process-inputs.outputs.environment == 'prod'
     uses: ./.github/workflows/update-valkey-website.yml
     with:
