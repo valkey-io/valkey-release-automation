@@ -24,6 +24,16 @@
 
 %bcond_with tests
 
+# Build the Lua scripting engine as a dlopen'd shared module
+# (libvalkeylua.so), new in Valkey 9.1. OFF by default: the upstream
+# default statically links Lua into valkey-server. Enable with:
+#   rpmbuild --with lua_module
+%bcond_with lua_module
+
+%if %{with lua_module}
+%global lua_module_build_flag BUILD_LUA=module
+%endif
+
 %define _data_dir       %{_localstatedir}/lib/%{name}
 %define _log_dir        %{_localstatedir}/log/%{name}
 %define _conf_dir       %{_sysconfdir}/%{name}
@@ -40,6 +50,7 @@
     V=1 \\\
     BUILD_WITH_SYSTEMD=yes \\\
     BUILD_TLS=yes \\\
+    %{?lua_module_build_flag} \\\
     USE_SYSTEM_JEMALLOC=yes \\\
     PREFIX=%{_prefix}
 
@@ -230,12 +241,15 @@ Documentation and additional man pages for Valkey.
 
 %patch -P1001 -p1
 
+%if %{with lua_module}
 # Strip the build-time RPATH that upstream 9.1 bakes into all binaries via
-# -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua in src/Makefile.
-# The first entry is redundant (libvalkeylua.so is in the default loader
-# search path) and the second leaks the absolute build directory, which
-# trips check-rpaths. Removing at source avoids needing chrpath/patchelf.
+# -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua in src/Makefile
+# (only injected when BUILD_LUA=module). The first entry is redundant
+# (libvalkeylua.so is in the default loader search path) and the second
+# leaks the absolute build directory, which trips check-rpaths. Removing
+# at source avoids needing chrpath/patchelf.
 sed -i '/FINAL_LDFLAGS.*-Wl,-rpath/d' src/Makefile
+%endif
 
 mv deps/lua/COPYRIGHT             COPYRIGHT-lua
 mv deps/@@BUNDLED_DEP_DIR@@/COPYING         COPYING-@@BUNDLED_DEP_NAME@@-BSD-3-Clause
@@ -274,6 +288,7 @@ popd
 %install
 make install %{install_flags}
 
+%if %{with lua_module}
 # Upstream's install-lua-module hardcodes PREFIX/lib for libvalkeylua.so
 # (new in Valkey 9.1) and does not reliably honor INSTALL_LIB across the
 # top-level -> src/Makefile recursion. On multilib distros (e.g. x86_64
@@ -282,6 +297,7 @@ make install %{install_flags}
 # libdir and clean up the wrong-location copy if present.
 install -Dm0644 src/modules/lua/libvalkeylua.so %{buildroot}%{_libdir}/libvalkeylua.so
 rm -f %{buildroot}%{_prefix}/lib/libvalkeylua.so
+%endif
 
 
 %if %{with docs}
@@ -463,7 +479,9 @@ EOF
 %endif
 
 %{_bindir}/%{name}-*
+%if %{with lua_module}
 %{_libdir}/libvalkeylua.so
+%endif
 %{_tmpfilesdir}/%{name}.conf
 %if 0%{?is_suse}
 %{_sysusersdir}/%{name}-user.conf

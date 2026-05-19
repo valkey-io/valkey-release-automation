@@ -12,6 +12,13 @@ export DEB_LDFLAGS_MAINT_APPEND = -Wl,-no-as-needed -ldl -latomic -llzf
 
 VALKEY_DOC_VERSION = @@DOC_VERSION@@
 
+# Build the Lua scripting engine as a dlopen'd shared module
+# (libvalkeylua.so), new in Valkey 9.1. OFF by default: the upstream
+# default statically links Lua into valkey-server. Enable by building
+# with the build profile, e.g.:
+#   DEB_BUILD_PROFILES=pkg.valkey.lua-module dpkg-buildpackage ...
+LUA_MODULE := $(if $(filter pkg.valkey.lua-module,$(DEB_BUILD_PROFILES)),yes,no)
+
 # Build jemalloc in parallel
 ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 	NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
@@ -28,7 +35,19 @@ override_dh_auto_clean:
 	rm -rf valkey-doc-$(VALKEY_DOC_VERSION) valkey-doc-$(VALKEY_DOC_VERSION).tar.gz
 
 override_dh_auto_build:
+ifeq ($(LUA_MODULE),yes)
+	# Strip the build-time RPATH that upstream 9.1 bakes into all binaries
+	# via -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua in src/Makefile
+	# (only injected when BUILD_LUA=module). The first entry is redundant
+	# (libvalkeylua.so is in the default loader search path) and the second
+	# leaks the absolute build directory, which trips lintian
+	# binary-or-shlib-defines-rpath. Removing at source avoids needing
+	# chrpath/patchelf (matches the RPM spec %prep approach).
+	sed -i '/FINAL_LDFLAGS.*-Wl,-rpath/d' src/Makefile
+	dh_auto_build -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEMD=yes USE_JEMALLOC=yes BUILD_LUA=module PREFIX=/usr@@EXTRA_BUILD_FLAGS@@
+else
 	dh_auto_build -- V=1 USE_SYSTEM_JEMALLOC=yes USE_SYSTEMD=yes USE_JEMALLOC=yes PREFIX=/usr@@EXTRA_BUILD_FLAGS@@
+endif
 
 # Build documentation if not nodoc profile
 ifeq (,$(filter nodoc,$(DEB_BUILD_PROFILES)))
@@ -72,11 +91,6 @@ override_dh_auto_install:
 	install -D -m 0755 src/valkey-server debian/tmp/usr/bin/valkey-server
 	install -D -m 0755 src/valkey-cli debian/tmp/usr/bin/valkey-cli
 	install -D -m 0755 src/valkey-benchmark debian/tmp/usr/bin/valkey-benchmark
-	# Lua scripting engine (new in Valkey 9.1): valkey-server is compiled
-	# against libvalkeylua.so and dlopens it at startup. /usr/lib is on the
-	# default loader search path on Debian/Ubuntu, so no ld.so.conf entry
-	# is required.
-	install -D -m 0644 src/modules/lua/libvalkeylua.so debian/tmp/usr/lib/libvalkeylua.so
 	# valkey-check-aof and valkey-check-rdb are the same binary as valkey-server
 	# (hardlinks in the source tree). Install as symlinks to avoid duplicate
 	# .build-id debug files that cause dbgsym package conflicts.
@@ -115,6 +129,18 @@ endif
 	# Generate systemd service files
 	debian/bin/generate-systemd-service-files
 
+override_dh_install:
+	dh_install
+ifeq ($(LUA_MODULE),yes)
+	# Lua scripting engine (Valkey 9.1, build profile pkg.valkey.lua-module):
+	# valkey-server is compiled against libvalkeylua.so and dlopens it at
+	# startup. /usr/lib is on the default loader search path on Debian/Ubuntu,
+	# so no ld.so.conf entry is required. Installed directly into the package
+	# (not via debian/tmp + a .install entry) so default builds without the
+	# profile don't fail on the absent .so.
+	install -D -m 0644 src/modules/lua/libvalkeylua.so debian/valkey-server/usr/lib/libvalkeylua.so
+endif
+
 override_dh_fixperms:
 	dh_fixperms
 	# Configuration files should be readable by valkey group only
@@ -141,5 +167,6 @@ override_dh_builddeb:
 	dh_builddeb -- -Zxz
 
 .PHONY: override_dh_auto_build override_dh_auto_install override_dh_auto_test \
-        override_dh_fixperms override_dh_compress override_dh_installchangelogs \
-        override_dh_installinit override_dh_installsystemd override_dh_builddeb
+        override_dh_install override_dh_fixperms override_dh_compress \
+        override_dh_installchangelogs override_dh_installinit \
+        override_dh_installsystemd override_dh_builddeb
