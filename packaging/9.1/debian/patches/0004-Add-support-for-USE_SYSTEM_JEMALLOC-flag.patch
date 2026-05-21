@@ -10,9 +10,9 @@ Updated for Valkey 9.1 (deps/Makefile:distclean dropped fast_float_c_interface a
  src/debug.c   |  4 ++++
  src/object.c  |  4 ++++
  src/sds.c     |  4 ++++
- src/zmalloc.c | 11 +++++++++++
+ src/zmalloc.c | 12 ++++++++++++
  src/zmalloc.h |  4 ++++
- 7 files changed, 34 insertions(+)
+ 7 files changed, 35 insertions(+)
 
 diff --git a/deps/Makefile b/deps/Makefile
 --- a/deps/Makefile
@@ -96,7 +96,7 @@ diff --git a/src/zmalloc.c b/src/zmalloc.c
 index 24dd11a..5c8e17a 100644
 --- a/src/zmalloc.c
 +++ b/src/zmalloc.c
-@@ -80,11 +80,22 @@ void zlibc_free(void *ptr) {
+@@ -80,11 +80,23 @@ void zlibc_free(void *ptr) {
  #define free(ptr) tc_free(ptr)
  /* Explicitly override malloc/free etc when using jemalloc. */
  #elif defined(USE_JEMALLOC)
@@ -109,6 +109,7 @@ index 24dd11a..5c8e17a 100644
 +#define dallocx(ptr,flags) dallocx(ptr,flags)
 +#define je_sdallocx(ptr,size,flags) sdallocx(ptr,size,flags)
 +#define je_mallctl mallctl
++#define je_posix_memalign(memptr,alignment,size) posix_memalign(memptr,alignment,size)
 +#else
  #define malloc(size) je_malloc(size)
  #define calloc(count, size) je_calloc(count, size)

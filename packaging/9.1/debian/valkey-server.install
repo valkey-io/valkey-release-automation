@@ -1,3 +1,2 @@
 etc/valkey/valkey.conf
 usr/bin/valkey-server
-usr/lib/libvalkeylua.so
