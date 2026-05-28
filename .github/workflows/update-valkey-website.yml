@@ -16,7 +16,6 @@ on:
         description: "Whether try-valkey files were uploaded to S3"
         required: false
         default: 'false'
-    secrets:
 
 jobs:
   update-website:
