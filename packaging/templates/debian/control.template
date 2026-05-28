@@ -3,6 +3,7 @@ Section: database
 Priority: optional
 Maintainer: Evgeniy Patlan <evgeniy.patlan@percona.com>
 Build-Depends:
+ debhelper-compat (=13),
  dh-exec,
  libhiredis-dev,
  libjemalloc-dev [linux-any],
