@@ -7,10 +7,6 @@ on:
         description: The version of Valkey to create.
         type: string
         required: true
-    secrets:
-      PAT_TOKEN:
-        description: PAT token for valkey-hashes repo.
-        required: true
 
 jobs:
   commit-hash:
@@ -23,10 +19,19 @@ jobs:
             exit 1
           fi
 
+      - name: Generate token
+        id: generate-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
+          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: valkey-hashes
+
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ github.repository_owner }}/valkey-hashes
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ steps.generate-token.outputs.token }}
 
       - name: Ensure repository is initialized
         run: |
@@ -67,4 +72,4 @@ jobs:
           # Clean up the downloaded file
           rm "$FILENAME"
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.generate-token.outputs.token }}

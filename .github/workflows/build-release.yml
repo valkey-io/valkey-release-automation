@@ -95,8 +95,7 @@ jobs:
     uses: ./.github/workflows/update-valkey-hashes.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
-    secrets:
-      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+    secrets: inherit
 
   update-valkey-container:
     needs:
@@ -106,8 +105,7 @@ jobs:
     uses: ./.github/workflows/update-valkey-container.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
-    secrets:
-      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+    secrets: inherit
 
   update-valkey-doc:
     needs:
@@ -117,8 +115,7 @@ jobs:
     uses: ./.github/workflows/update-valkey-doc.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
-    secrets:
-      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+    secrets: inherit
   
   generate-build-matrix:
     needs:
@@ -185,8 +182,7 @@ jobs:
       version: ${{ needs.process-inputs.outputs.version }}
       bashbrew_json: ${{ needs.update-valkey-container.outputs.bashbrew_output }}
       try_valkey_uploaded: ${{ needs.update-try-valkey.outputs.try_valkey_uploaded }}
-    secrets:
-      PAT_TOKEN: ${{ secrets.AUTOMATION_PAT }}
+    secrets: inherit
 
   trigger-valkey-bundle:
     needs:
@@ -194,11 +190,21 @@ jobs:
       - update-valkey-container
     runs-on: ubuntu-latest
     steps:
+      - name: Generate token
+        if: needs.process-inputs.outputs.trigger_bundle == 'true'
+        id: generate-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
+          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: valkey-bundle
+
       - name: Trigger Valkey Bundle Update
         if: needs.process-inputs.outputs.trigger_bundle == 'true'
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
         with:
-          token: ${{ secrets.AUTOMATION_PAT }}
+          token: ${{ steps.generate-token.outputs.token }}
           repository: ${{ github.repository_owner }}/valkey-bundle
           event-type: valkey-release
           client-payload: >

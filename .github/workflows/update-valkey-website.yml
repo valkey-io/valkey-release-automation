@@ -16,9 +16,6 @@ on:
         description: "Whether try-valkey files were uploaded to S3"
         required: false
         default: 'false'
-    secrets:
-      PAT_TOKEN:
-        required: true
 
 jobs:
   update-website:
@@ -30,6 +27,15 @@ jobs:
             echo "Invalid version format. Expected format: x.y.z or 'unstable'"
             exit 1
           fi
+
+      - name: Generate token
+        id: generate-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        with:
+          app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
+          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: valkey-io.github.io
 
       - name: Setup Python
         uses: actions/setup-python@v4
@@ -47,7 +53,7 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/valkey-io.github.io
           path: valkey-io.github.io
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ steps.generate-token.outputs.token }}
 
       - name: Format version for filename
         id: format-version
@@ -120,7 +126,7 @@ jobs:
         if: steps.update-website.outputs.has_changes == 'true' || steps.update-try-valkey.outputs.has_try_valkey_changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
-          token: ${{ secrets.PAT_TOKEN }}
+          token: ${{ steps.generate-token.outputs.token }}
           path: valkey-io.github.io
           branch: update-website-${{ inputs.version }}
           commit-message: "updated website for version ${{ inputs.version }}"
