@@ -160,6 +160,25 @@ jobs:
       bucket_name: ${{ needs.process-inputs.outputs.environment == 'dev' && secrets.AWS_TEST_BUCKET || secrets.AWS_S3_BUCKET }}
       role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
+  release-build-packages:
+    needs:
+      - process-inputs
+    # Only GA releases publish distro packages. RC versions are skipped for now
+    # because packages.yml publishes to the production S3 repo + download site;
+    # routing RC packages to a separate test bucket is the planned follow-up.
+    if: needs.process-inputs.outputs.environment == 'prod' && !contains(needs.process-inputs.outputs.version, '-rc')
+    # packages.yml's deploy-pages job pushes to the gh-pages branch and the
+    # publish jobs use AWS OIDC, so this calling job must grant write contents
+    # and id-token. A called workflow can only downgrade the caller's token
+    # permissions, and this workflow is otherwise contents:read.
+    permissions:
+      id-token: write
+      contents: write
+    uses: ./.github/workflows/packages.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+    secrets: inherit
+
   update-try-valkey:
     needs:
       - process-inputs
