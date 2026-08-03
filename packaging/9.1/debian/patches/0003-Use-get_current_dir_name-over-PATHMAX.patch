@@ -29,7 +29,7 @@ index 07c6af6..e3d9d34 100644
                    "Failed opening the temp RDB file %s (in server root dir %s) "
                    "for saving: %s",
                    filename, cwdp ? cwdp : "unknown", str_err);
-+        zfree(cwdp);
++        zlibc_free(cwdp);
          errno = saved_errno;
          return C_ERR;
      }
@@ -51,7 +51,7 @@ index 07c6af6..e3d9d34 100644
                    "Error moving temp DB file %s on the final "
                    "destination %s (in server root dir %s): %s",
                    tmpfile, filename, cwdp ? cwdp : "unknown", str_err);
-+        zfree(cwdp);
++        zlibc_free(cwdp);
          unlink(tmpfile);
          stopSaving(0);
          return C_ERR;

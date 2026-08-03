@@ -31,7 +31,7 @@ index 1234567..abcdef0 100644
              filename,
              cwdp ? cwdp : "unknown",
              str_err);
-+        zfree(cwdp);
++        zlibc_free(cwdp);
          errno = saved_errno;
          return C_ERR;
      }
@@ -56,7 +56,7 @@ index 1234567..abcdef0 100644
              filename,
              cwdp ? cwdp : "unknown",
              str_err);
-+        zfree(cwdp);
++        zlibc_free(cwdp);
          unlink(tmpfile);
          stopSaving(0);
          return C_ERR;
