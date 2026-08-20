@@ -82,6 +82,11 @@ list_platforms() {
 log() { echo "==> $*"; }
 err() { echo "ERROR: $*" >&2; exit 1; }
 
+# True when the platform id passes the --platform filter (empty filter = all)
+want_platform() {
+  [[ -z "${FILTER_PLATFORM}" || "$1" == "${FILTER_PLATFORM}" ]]
+}
+
 # ── Parse arguments ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -402,9 +407,7 @@ test_rpm() {
 if ${BUILD_DEB}; then
   for p in "${DEB_PLATFORMS[@]}"; do
     IFS='|' read -r id container codename <<< "$p"
-    if [[ -n "${FILTER_PLATFORM}" && "${id}" != "${FILTER_PLATFORM}" ]]; then
-      continue
-    fi
+    want_platform "$id" || continue
     build_deb "$id" "$container" "$codename"
   done
 fi
@@ -413,9 +416,7 @@ fi
 if ${BUILD_RPM}; then
   for p in "${RPM_PLATFORMS[@]}"; do
     IFS='|' read -r id container family epel <<< "$p"
-    if [[ -n "${FILTER_PLATFORM}" && "${id}" != "${FILTER_PLATFORM}" ]]; then
-      continue
-    fi
+    want_platform "$id" || continue
     build_rpm "$id" "$container" "$family" "$epel"
   done
 fi
@@ -429,9 +430,7 @@ if ${RUN_TESTS}; then
   if ${BUILD_DEB}; then
     for p in "${DEB_PLATFORMS[@]}"; do
       IFS='|' read -r id container codename <<< "$p"
-      if [[ -n "${FILTER_PLATFORM}" && "${id}" != "${FILTER_PLATFORM}" ]]; then
-        continue
-      fi
+      want_platform "$id" || continue
       test_deb "$id" "$container"
     done
   fi
@@ -439,9 +438,7 @@ if ${RUN_TESTS}; then
   if ${BUILD_RPM}; then
     for p in "${RPM_PLATFORMS[@]}"; do
       IFS='|' read -r id container family epel <<< "$p"
-      if [[ -n "${FILTER_PLATFORM}" && "${id}" != "${FILTER_PLATFORM}" ]]; then
-        continue
-      fi
+      want_platform "$id" || continue
       test_rpm "$id" "$container"
     done
   fi

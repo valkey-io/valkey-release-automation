@@ -41,8 +41,6 @@ apt-get install -y \
   tar \
   gzip \
   lsb-release
-apt-get -y install pkg-config || true
-apt-get -y install pkgconf || true
 # Critical build dependencies — hard-fail if any of these are missing.
 # These are required to produce correct, working binaries.
 echo "Installing critical build dependencies..."
@@ -126,12 +124,34 @@ echo "✓ Found packaging files at: $PACKAGING_DIR"
 
 # Download Valkey source (skip if already present, e.g. pre-mounted)
 cd /root
+# SHA-pinned builds: use the mounted exact-commit source tarball when
+# provided (see build-rpm.sh for rationale).
+if [ -n "${VALKEY_SOURCE_TARBALL:-}" ] && [ -f "${VALKEY_SOURCE_TARBALL}" ]; then
+  echo "Using mounted source tarball ${VALKEY_SOURCE_TARBALL}"
+  cp "${VALKEY_SOURCE_TARBALL}" "valkey_${VALKEY_VERSION}.orig.tar.gz"
+fi
+
 if [ ! -f "valkey_${VALKEY_VERSION}.orig.tar.gz" ]; then
   echo "Downloading Valkey ${VALKEY_VERSION}..."
   if ! wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz; then
-    # Tag not yet released — try the MAJOR.MINOR branch and repack
+    # Security: every version reaching this script is release-formatted
+    # (packages.yml validates x.y.z / x.y.z-rcN before the matrix), so a
+    # failed tag download on a release build must fail loudly. Silently
+    # repackaging the moving MAJOR.MINOR branch under the release version
+    # would ship whatever the branch HEAD happens to be as if it were the
+    # tagged, qualified release. The branch fallback exists solely for
+    # pre-tag testing of packaging changes and is reachable only when the
+    # caller explicitly opts in with ALLOW_BRANCH_FALLBACK=true (the
+    # pull_request dev path in packages.yml sets it; release paths never do).
+    if [ "${ALLOW_BRANCH_FALLBACK:-}" != "true" ]; then
+      rm -f "valkey_${VALKEY_VERSION}.orig.tar.gz"
+      echo "ERROR: tag download failed for ${VALKEY_VERSION}; refusing to fall back to the moving branch for a release build."
+      echo "Verify the tag exists, or pass an exact source_sha. ALLOW_BRANCH_FALLBACK=true is reserved for pre-tag dev/PR builds."
+      exit 1
+    fi
+    # Pre-tag testing only: try the MAJOR.MINOR branch and repack
     BRANCH_REF="${VALKEY_VERSION%.*}"
-    echo "Tag ${VALKEY_VERSION} not found, trying branch ${BRANCH_REF}..."
+    echo "Tag ${VALKEY_VERSION} not found, trying branch ${BRANCH_REF} (ALLOW_BRANCH_FALLBACK=true)..."
     wget -q https://github.com/valkey-io/valkey/archive/refs/heads/${BRANCH_REF}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz
     # GitHub branch archives extract to valkey-BRANCH; dpkg expects valkey-VERSION
     NEEDS_REPACK=1
@@ -206,7 +226,6 @@ if grep -q "jammy" /etc/os-release 2>/dev/null; then
     if [ -f "debian/rules" ]; then
       echo "Patching debian/rules to disable USE_SYSTEM_JEMALLOC..."
       sed -i "s/USE_SYSTEM_JEMALLOC=yes/USE_SYSTEM_JEMALLOC=no/g" debian/rules || true
-      sed -i "s/USE_JEMALLOC=yes/USE_JEMALLOC=yes/g" debian/rules || true
       echo "✓ Patched debian/rules"
     fi
   else

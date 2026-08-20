@@ -1,4 +1,11 @@
-name: Build Try Valkey Image
+name: Update Try Valkey
+# Security boundary: this workflow writes the production S3 bucket. The
+# workflow_call path stays ungated here because it is only reachable through
+# build-release.yml, which gates every production event shape with the
+# release-publish environment. A STANDALONE
+# workflow_dispatch of this file has no such upstream authorization, so it
+# must first pass the prod-approval job in the release-publish protected
+# environment below.
 
 on:
   workflow_call:
@@ -14,7 +21,7 @@ on:
     outputs:
       try_valkey_uploaded:
         description: Whether try-valkey files were uploaded to S3
-        value: ${{ jobs.build-try-valkey.outputs.try_valkey_uploaded }}
+        value: ${{ jobs.upload-try-valkey.outputs.try_valkey_uploaded }}
   workflow_dispatch:
     inputs:
       version:
@@ -26,15 +33,41 @@ on:
         type: string
         required: true
 
+# Least privilege by default; id-token: write is granted only on the job
+# that assumes the AWS role via OIDC.
 permissions:
-  id-token: write
   contents: read
 
+concurrency:
+  group: try-valkey-${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
-  build-try-valkey:
+  # Gates ONLY a direct workflow_dispatch of this file: on the workflow_call
+  # path github.workflow_ref points at the top-level caller
+  # (build-release.yml), so this job is skipped and no second approval is
+  # required. NOTE for the repository owner: the release-publish environment
+  # must be configured in repo settings with required reviewers, otherwise
+  # this gate approves automatically.
+  prod-approval:
+    name: Prod approval gate (standalone dispatch)
+    if: github.event_name == 'workflow_dispatch' && contains(github.workflow_ref, 'update-try-valkey.yml')
     runs-on: ubuntu-latest
+    environment: release-publish
+    steps:
+      - name: Confirm standalone production dispatch
+        run: echo "Standalone production dispatch approved through the release-publish protected environment."
+
+  build-try-valkey:
+    needs: prod-approval
+    # The gate is skipped on the workflow_call path, so this must run when
+    # no needed job failed rather than on plain success.
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
-      try_valkey_uploaded: ${{ steps.upload-s3.outputs.files_uploaded || 'false' }}
+      should_build: ${{ steps.validate-inputs.outputs.should_build }}
     steps:
       - name: Setup Python
         uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
@@ -42,41 +75,46 @@ jobs:
           python-version: '3.8'
 
       - name: Checkout automation scripts
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ github.repository_owner }}/valkey-release-automation
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: valkey-release-automation
+          persist-credentials: false
 
       - name: Determine if try-valkey should be built
         id: validate-inputs
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
         run: |
           SHOULD_BUILD="true"
 
-          # Validate version format
-          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+          # Validate version format FIRST, before any other use of the value.
+          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
               echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
               exit 1
           fi
 
           # Skip RC and unstable builds
-          if [[ "${{ inputs.version }}" == *"-rc"* ]]; then
+          if [[ "$VERSION" == *"-rc"* ]]; then
               echo "Skipping Try Valkey build for RC version"
               SHOULD_BUILD="false"
-          elif [[ "${{ inputs.version }}" == "unstable" ]]; then
+          elif [[ "$VERSION" == "unstable" ]]; then
               echo "Skipping Try Valkey build for unstable version"
               SHOULD_BUILD="false"
           else
               # Check if version matches the latest release
               # This workflow is triggered after a release is published on valkey-io/valkey,
               # so the input version should exactly match the latest release.
-              LATEST_VERSION=$(gh release list --repo valkey-io/valkey --exclude-pre-releases --json tagName --jq '.[].tagName' | sort -V | tail -n1)
-              if [[ "${{ inputs.version }}" == "$LATEST_VERSION" ]]; then
-                  echo "Version validation passed: ${{ inputs.version }} == $LATEST_VERSION"
+              # --exclude-drafts: drafts must not shadow the true latest
+              # release; --limit 200: the default page is only 30 results.
+              LATEST_VERSION=$(gh release list --repo valkey-io/valkey --exclude-pre-releases --exclude-drafts --limit 200 --json tagName --jq '.[].tagName' | sort -V | tail -n1)
+              if [[ "$VERSION" == "$LATEST_VERSION" ]]; then
+                  echo "Version validation passed: $VERSION == $LATEST_VERSION"
               else
                   SHOULD_BUILD="false"
-                  echo "Version mismatch: ${{ inputs.version }} != $LATEST_VERSION (skipping try-valkey build)"
+                  echo "Version mismatch: $VERSION != $LATEST_VERSION (skipping try-valkey build)"
               fi
           fi
 
@@ -88,17 +126,19 @@ jobs:
 
       - name: Checkout valkey-try-me repository
         if: steps.validate-inputs.outputs.should_build == 'true'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-try-me
           path: valkey-try-me
+          persist-credentials: false
 
       - name: Checkout valkey-hashes repository
         if: steps.validate-inputs.outputs.should_build == 'true'
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-hashes
           path: valkey-hashes
+          persist-credentials: false
 
       - name: Install Try Valkey prerequisites
         if: steps.validate-inputs.outputs.should_build == 'true'
@@ -119,9 +159,11 @@ jobs:
       - name: Extract Valkey download info
         if: steps.validate-inputs.outputs.should_build == 'true'
         id: extract-info
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           # Use the Python script to extract download information
-          OUTPUT=$(python3 valkey-release-automation/scripts/extract_hashes_info.py "${{ inputs.version }}" valkey-hashes)
+          OUTPUT=$(python3 valkey-release-automation/scripts/extract_hashes_info.py "$VERSION" valkey-hashes)
           DOWNLOAD_SHA=$(echo "$OUTPUT" | cut -d' ' -f1)
           DOWNLOAD_URL=$(echo "$OUTPUT" | cut -d' ' -f2)
           
@@ -133,15 +175,16 @@ jobs:
       - name: Build Try Valkey image
         if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
+        env:
+          VALKEY_VERSION: ${{ inputs.version }}
+          VALKEY_DOWNLOAD_URL: ${{ steps.extract-info.outputs.download_url }}
+          VALKEY_DOWNLOAD_SHA: ${{ steps.extract-info.outputs.download_sha }}
         run: |
           # Activate virtual environment
           source venv/bin/activate
           
-          # Run automated build
+          # Run automated build (version/URL/SHA are exported via step env)
           MODE=local AUTO_SAVE_STATE=true \
-          VALKEY_VERSION="${{ inputs.version }}" \
-          VALKEY_DOWNLOAD_URL="${{ steps.extract-info.outputs.download_url }}" \
-          VALKEY_DOWNLOAD_SHA="${{ steps.extract-info.outputs.download_sha }}" \
           ./src/build.sh
           
           echo "Build completed successfully"
@@ -149,9 +192,9 @@ jobs:
       - name: Verify generated files
         if: steps.validate-inputs.outputs.should_build == 'true'
         working-directory: valkey-try-me
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
-          
           echo "Verifying generated files for version: $VERSION"
           
           # Check filesystem files
@@ -182,23 +225,63 @@ jobs:
             exit 1
           fi
 
-      - name: Configure AWS credentials
+      - name: Upload generated files
         if: steps.validate-inputs.outputs.should_build == 'true'
-        uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: try-valkey-files-${{ inputs.version }}
+          path: valkey-try-me/${{ inputs.version }}/
+          retention-days: 1
+
+  upload-try-valkey:
+    needs: build-try-valkey
+    if: needs.build-try-valkey.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      try_valkey_uploaded: ${{ steps.upload-s3.outputs.files_uploaded || 'false' }}
+    steps:
+      - name: Download generated files
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: try-valkey-files-${{ inputs.version }}
+          path: generated
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ inputs.region }}
 
       - name: Upload files to S3
         id: upload-s3
-        if: steps.validate-inputs.outputs.should_build == 'true'
-        working-directory: valkey-try-me
+        env:
+          VERSION: ${{ inputs.version }}
+          BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
-          VERSION="${{ inputs.version }}"
-          BUCKET="${{ secrets.AWS_S3_BUCKET }}"
-          
-          echo "Uploading files to S3 bucket"
-          aws s3 sync "$VERSION/" "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
-                    
-          echo "Files uploaded successfully to S3"
-          echo "files_uploaded=true" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          [[ -n "$BUCKET" ]] || { echo "AWS_S3_BUCKET is required"; exit 1; }
+          aws s3 sync generated/ "s3://$BUCKET/try-me-valkey/$VERSION/" --delete
+          echo "files_uploaded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Write upload sentinel
+        if: steps.upload-s3.outputs.files_uploaded == 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p /tmp/try-valkey-sentinel
+          echo "$VERSION" > /tmp/try-valkey-sentinel/uploaded
+
+      # Native evidence that the upload actually happened: the wrapper job
+      # succeeds even when applicability logic skips the upload, so release
+      # observers must not treat job success as an upload. This artifact
+      # exists if and only if the S3 sync ran.
+      - name: Upload sentinel artifact
+        if: steps.upload-s3.outputs.files_uploaded == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: try-valkey-uploaded-${{ inputs.version }}
+          path: /tmp/try-valkey-sentinel/uploaded
+          retention-days: 90

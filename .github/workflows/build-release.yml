@@ -1,4 +1,14 @@
-name: Build Release New Version
+name: Build Release
+# Security boundary: every production request, including repository_dispatch,
+# must pass this repository's release-publish environment. A dispatch token's
+# contents:write permission authenticates only access to this repository; it
+# does not prove which authorized caller created the event. The protected environment therefore gates all
+# production S3 and downstream writes regardless of event shape.
+# Standalone sub-workflow dispatches must not write production: any
+# sub-workflow that also exposes workflow_dispatch gates its own standalone
+# prod path behind release-publish (see update-try-valkey.yml and packages.yml).
+#
+run-name: "Build Release ${{ github.event.client_payload.version || inputs.version || 'push' }} (${{ github.event.client_payload.environment || inputs.environment || 'dev' }})"
 
 on:
   repository_dispatch:
@@ -6,8 +16,7 @@ on:
   push:
     paths:
       - '.github/workflows/build-release.yml'
-      - '.github/workflows/call-build-linux-arm-packages.yml'
-      - '.github/workflows/call-build-linux-x86-packages.yml'
+      - '.github/workflows/call-build-linux-archives.yml'
       - '.github/actions/generate-package-build-matrix/*'
   workflow_dispatch:
     inputs:
@@ -22,10 +31,21 @@ on:
         options:
           - dev
           - prod
+      source_sha:
+        type: string
+        description: "Exact Valkey commit (full lowercase 40-hex); optional, but must match the prod tag when supplied"
+        required: false
+        default: ''
 
+# Least privilege by default. id-token: write is granted only on the
+# specific jobs that assume the AWS role via OIDC (the package build calls
+# and try-valkey), never workflow-wide.
 permissions:
-  id-token: write
   contents: read
+
+concurrency:
+  group: release-production-${{ github.event.client_payload.version || inputs.version || 'unstable' }}
+  cancel-in-progress: false
 
 jobs:
   process-inputs:
@@ -33,75 +53,190 @@ jobs:
     outputs:
       version: ${{ steps.process-inputs.outputs.version }}
       environment: ${{ steps.process-inputs.outputs.environment }}
+      source_sha: ${{ steps.process-inputs.outputs.source_sha }}
       trigger_bundle: ${{ steps.process-inputs.outputs.trigger_bundle }}
 
     steps:
       - name: Process and validate inputs
         id: process-inputs
+        # Dispatch payloads and manual inputs are attacker-influenced data.
+        # They enter the script only through env, never by expression
+        # interpolation, so a crafted payload cannot inject shell before
+        # the validation below runs.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          EVENT_NAME: ${{ github.event_name }}
+          PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
+          PAYLOAD_ENVIRONMENT: ${{ github.event.client_payload.environment }}
+          PAYLOAD_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
+          INPUT_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
-          # Determine the event type
-          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
-            VERSION=${{ github.event.client_payload.version }}
-            ENVIRONMENT=${{ github.event.client_payload.environment }}
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
+          set -euo pipefail
+
+          # Determine the event type and select the candidate values.
+          if [[ "${EVENT_NAME}" == "repository_dispatch" ]]; then
+            VERSION="${PAYLOAD_VERSION}"
+            ENVIRONMENT="${PAYLOAD_ENVIRONMENT}"
+            SOURCE_SHA="${PAYLOAD_SOURCE_SHA}"
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
             VERSION="unstable"
             ENVIRONMENT="dev"
+            SOURCE_SHA=""
           else
-            VERSION=${{ github.event.inputs.version }}
-            ENVIRONMENT=${{ github.event.inputs.environment }}
+            VERSION="${INPUT_VERSION}"
+            ENVIRONMENT="${INPUT_ENVIRONMENT}"
+            SOURCE_SHA="${INPUT_SOURCE_SHA}"
           fi
 
-          # Validate version
-          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+          # Validate version FIRST, before any other use of the value.
+          if [[ ! "${VERSION}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
             echo "Invalid version format. Expected format: x.y.z, x.y.z-rcN, or 'unstable'."
             exit 1
           fi
 
+          # A supplied SHA is always shape-checked. Production additionally
+          # resolves the immutable Valkey release tag below and either fills
+          # an omitted SHA (the normal release-event path) or requires the
+          # supplied SHA to match it exactly.
+          if [[ -n "${SOURCE_SHA}" && ! "${SOURCE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid source_sha. Expected a full lowercase 40-character hex commit SHA."
+            exit 1
+          fi
+
           # Default environment to 'dev' if not provided for safety. Environment is made non-optional.
-          if [[ -z "$ENVIRONMENT" ]]; then
+          if [[ -z "${ENVIRONMENT}" ]]; then
             ENVIRONMENT="dev"
           fi
 
           # Validate environment
-          if [[ "$ENVIRONMENT" != "dev" && "$ENVIRONMENT" != "prod" ]]; then
+          if [[ "${ENVIRONMENT}" != "dev" && "${ENVIRONMENT}" != "prod" ]]; then
             echo "Invalid environment. Allowed values: 'dev', 'prod'."
             exit 1
           fi
 
-          TRIGGER_BUNDLE="false"
+          if [[ "${ENVIRONMENT}" == "prod" ]]; then
+            if [[ "$WORKFLOW_REF" != "refs/heads/main" ]]; then
+              echo "Production releases must run from refs/heads/main, not $WORKFLOW_REF" >&2
+              exit 1
+            fi
+            resolve_tag_commit() {
+              local ref_json object_type object_sha tag_json
+              ref_json=$(gh api "repos/${REPO_OWNER}/valkey/git/ref/tags/${VERSION}")
+              object_type=$(jq -r '.object.type' <<< "$ref_json")
+              object_sha=$(jq -r '.object.sha' <<< "$ref_json")
+              if [[ "$object_type" == "tag" ]]; then
+                tag_json=$(gh api "repos/${REPO_OWNER}/valkey/git/tags/${object_sha}")
+                object_type=$(jq -r '.object.type' <<< "$tag_json")
+                object_sha=$(jq -r '.object.sha' <<< "$tag_json")
+              fi
+              [[ "$object_type" == "commit" && "$object_sha" =~ ^[0-9a-f]{40}$ ]] || {
+                echo "Production tag ${VERSION} does not resolve to a commit" >&2
+                return 1
+              }
+              printf '%s' "$object_sha"
+            }
+            TAG_SHA=$(resolve_tag_commit)
+            if [[ -n "$SOURCE_SHA" && "$SOURCE_SHA" != "$TAG_SHA" ]]; then
+              echo "source_sha $SOURCE_SHA does not match release tag ${VERSION} at $TAG_SHA" >&2
+              exit 1
+            fi
+            SOURCE_SHA="$TAG_SHA"
+          fi
 
-          if [[ "$VERSION" != "unstable" ]]; then
-            VERSION_WITHOUT_RC=$(echo "$VERSION" | sed 's/-rc[0-9]*$//')
-            MAJOR=$(echo "$VERSION_WITHOUT_RC" | cut -d. -f1)
-            MINOR=$(echo "$VERSION_WITHOUT_RC" | cut -d. -f2)
-            
-            # Check if version is >= 8.1.0
-            if [[ "$MAJOR" -gt 8 ]] || [[ "$MAJOR" -eq 8 && "$MINOR" -ge 1 ]]; then
-              TRIGGER_BUNDLE="true"
-            else
-              echo "Version $VERSION is < 8.1.0 which is incompatible with Valkey Bundle so we won't trigger the Bundle release"
+          TRIGGER_BUNDLE=false
+          if [[ "$ENVIRONMENT" == "prod" && "$VERSION" != "unstable" ]]; then
+            BASE_VERSION="${VERSION%%-rc*}"
+            MAJOR="${BASE_VERSION%%.*}"
+            REST="${BASE_VERSION#*.}"
+            MINOR="${REST%%.*}"
+            if (( MAJOR > 8 || (MAJOR == 8 && MINOR >= 1) )); then
+              TRIGGER_BUNDLE=true
             fi
           fi
-          
+
           # Output validated variables
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-          echo "trigger_bundle=$TRIGGER_BUNDLE" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
+          echo "trigger_bundle=${TRIGGER_BUNDLE}" >> "$GITHUB_OUTPUT"
+
+  # Every production request must pass the release-publish protected
+  # environment before any downstream job runs. The dev path is never gated.
+  # NOTE for the repository owner: configure required reviewers, prevent
+  # self-review/admin bypass, and restrict deployment branches; otherwise the
+  # environment is not a meaningful capability boundary.
+  prod-approval:
+    name: Prod approval gate
+    needs: process-inputs
+    if: needs.process-inputs.outputs.environment == 'prod'
+    runs-on: ubuntu-latest
+    environment: release-publish
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Confirm production dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          CURRENT_SHA=$(gh api "repos/${REPO}/commits/main" --jq '.sha')
+          [[ "$GITHUB_SHA" == "$CURRENT_SHA" ]] || {
+            echo "Production automation is stale: run=$GITHUB_SHA current-main=$CURRENT_SHA" >&2
+            exit 1
+          }
+          ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
+          REVIEWERS=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$ENVIRONMENT")
+          PREVENT_SELF=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | any' <<< "$ENVIRONMENT")
+          ADMIN_BYPASS=$(jq -r '.can_admins_bypass // true' <<< "$ENVIRONMENT")
+          CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
+          POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
+          [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
+          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
+          [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
+          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
+            echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
+            exit 1
+          }
+
+          APPROVER=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
+          [[ -n "$APPROVER" ]] || {
+            echo "No human approval record exists for release-publish" >&2
+            exit 1
+          }
+          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
+            echo "The workflow dispatcher cannot approve their own production deployment" >&2
+            exit 1
+          }
+          echo "Production dispatch approved by @$APPROVER through release-publish."
 
   update-valkey-hashes:
     needs:
       - process-inputs
-    if: needs.process-inputs.outputs.environment == 'prod'
+      - prod-approval
+    # prod-approval is skipped only for dev, so this must allow skipped needs
+    # on that path while still refusing a failed or rejected production gate.
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
     uses: ./.github/workflows/update-valkey-hashes.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      source_sha: ${{ needs.process-inputs.outputs.source_sha }}
     secrets: inherit
 
   update-valkey-container:
     needs:
       - process-inputs
       - update-valkey-hashes
-    if: needs.process-inputs.outputs.environment == 'prod'
+      - prod-approval
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
     uses: ./.github/workflows/update-valkey-container.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -111,12 +246,24 @@ jobs:
     needs:
       - process-inputs
       - update-valkey-hashes
-    if: needs.process-inputs.outputs.environment == 'prod'
+      - prod-approval
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
     uses: ./.github/workflows/update-valkey-doc.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
     secrets: inherit
-  
+
+  update-valkey-helm:
+    needs:
+      - process-inputs
+      - update-valkey-container
+      - prod-approval
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && !contains(needs.process-inputs.outputs.version, '-rc') }}
+    uses: ./.github/workflows/update-valkey-helm.yml
+    with:
+      version: ${{ needs.process-inputs.outputs.version }}
+    secrets: inherit
+
   generate-build-matrix:
     needs:
       - process-inputs
@@ -127,20 +274,41 @@ jobs:
       arm64-build-matrix: ${{ steps.set-matrix.outputs.arm64-build-matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/generate-package-build-matrix
         id: set-matrix
-        with:
-          ref: ${{ needs.process-inputs.outputs.version }}
-  
+
   release-build-linux-x86-packages:
     needs:
       - generate-build-matrix
       - process-inputs
-    uses: ./.github/workflows/call-build-linux-x86-packages.yml
+      - prod-approval
+    # Runs for dev (gate skipped) and for prod once the gate is not failed:
+    # the gate is skipped for dev and must succeed for every production event
+    # before the prod S3 bucket is written.
+    # Push-event (dev) builds are additionally skipped on forks: forks lack
+    # the AWS role secret, so every push would fail this job and email the
+    # fork owner. Upstream keeps its push builds; a fork that configured AWS
+    # opts back in via the RELEASE_DEV_BUILDS repository variable. The extra
+    # clause constrains ONLY push events; repository_dispatch and
+    # workflow_dispatch behave exactly as before.
+    if: >-
+      ${{ !failure() && !cancelled() &&
+          (github.event_name != 'push' ||
+           github.repository_owner == 'valkey-io' ||
+           vars.RELEASE_DEV_BUILDS == 'true') }}
+    # OIDC role assumption for the S3 upload happens inside this call chain,
+    # so id-token is granted here and nowhere else at workflow scope.
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/call-build-linux-archives.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      # Security: production is pinned to the qualification-approved commit;
+      # only dev push builds may leave this empty.
+      source_sha: ${{ needs.process-inputs.outputs.source_sha }}
       build_matrix: ${{ needs.generate-build-matrix.outputs.x86_64-build-matrix }}
       region: us-west-2
     secrets:
@@ -151,9 +319,26 @@ jobs:
     needs:
       - generate-build-matrix
       - process-inputs
-    uses: ./.github/workflows/call-build-linux-arm-packages.yml
+      - prod-approval
+    # Same push-event fork gate as the x86 job above: avoid guaranteed AWS
+    # role failures (and failure emails) on forks while leaving the
+    # repository_dispatch and workflow_dispatch paths untouched.
+    if: >-
+      ${{ !failure() && !cancelled() &&
+          (github.event_name != 'push' ||
+           github.repository_owner == 'valkey-io' ||
+           vars.RELEASE_DEV_BUILDS == 'true') }}
+    # OIDC role assumption for the S3 upload happens inside this call chain,
+    # so id-token is granted here and nowhere else at workflow scope.
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/call-build-linux-archives.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      # Security: production is pinned to the qualification-approved commit;
+      # only dev push builds may leave this empty.
+      source_sha: ${{ needs.process-inputs.outputs.source_sha }}
       build_matrix: ${{ needs.generate-build-matrix.outputs.arm64-build-matrix }}
       region: us-west-2
     secrets:
@@ -163,10 +348,11 @@ jobs:
   release-build-packages:
     needs:
       - process-inputs
+      - prod-approval
     # Only GA releases publish distro packages. RC versions are skipped for now
     # because packages.yml publishes to the production S3 repo + download site;
     # routing RC packages to a separate test bucket is the planned follow-up.
-    if: needs.process-inputs.outputs.environment == 'prod' && !contains(needs.process-inputs.outputs.version, '-rc')
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && !contains(needs.process-inputs.outputs.version, '-rc') }}
     # packages.yml's deploy-pages job pushes to the gh-pages branch and the
     # publish jobs use AWS OIDC, so this calling job must grant write contents
     # and id-token. A called workflow can only downgrade the caller's token
@@ -177,13 +363,25 @@ jobs:
     uses: ./.github/workflows/packages.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      # Security: pin the distro package source to the qualification-approved
+      # commit. Production validation above makes this non-empty.
+      source_sha: ${{ needs.process-inputs.outputs.source_sha }}
+      # publish now defaults to false in packages.yml; the release path opts
+      # in only after this job's release-publish dependency succeeded.
+      publish: true
+      release_gate_passed: true
     secrets: inherit
 
   update-try-valkey:
     needs:
       - process-inputs
       - update-valkey-hashes
-    if: needs.process-inputs.outputs.environment == 'prod'
+      - prod-approval
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
+    # update-try-valkey.yml assumes the AWS role via OIDC for its S3 upload.
+    permissions:
+      id-token: write
+      contents: read
     uses: ./.github/workflows/update-try-valkey.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -195,39 +393,78 @@ jobs:
       - process-inputs
       - update-valkey-hashes
       - update-valkey-container
-    if: needs.process-inputs.outputs.environment == 'prod'
+      - update-try-valkey
+      - prod-approval
+    # update-try-valkey is in needs only so its try_valkey_uploaded output
+    # is readable; a Try Valkey failure must not suppress the independent
+    # release-page update, so the gate is !cancelled() with explicit
+    # success checks on the prerequisites this job genuinely requires.
+    # prod-approval is mandatory here because this is a production-only job;
+    # the skipped allowance remains for expression robustness on non-prod runs.
+    # Release candidates do not update the public release page.
+    if: >-
+      ${{ !cancelled() &&
+          needs.process-inputs.result == 'success' &&
+          needs.update-valkey-hashes.result == 'success' &&
+          needs.update-valkey-container.result == 'success' &&
+          (needs.prod-approval.result == 'success' || needs.prod-approval.result == 'skipped') &&
+          needs.process-inputs.outputs.environment == 'prod' &&
+          !contains(needs.process-inputs.outputs.version, '-rc') }}
     uses: ./.github/workflows/update-valkey-website.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
       bashbrew_json: ${{ needs.update-valkey-container.outputs.bashbrew_output }}
-      try_valkey_uploaded: ${{ needs.update-try-valkey.outputs.try_valkey_uploaded }}
+      # 'true' only when the Try Valkey upload job succeeded AND emitted
+      # true; on failure or skip the pointer stays 'false'.
+      try_valkey_uploaded: ${{ (needs.update-try-valkey.result == 'success' && needs.update-try-valkey.outputs.try_valkey_uploaded == 'true') && 'true' || 'false' }}
     secrets: inherit
 
   trigger-valkey-bundle:
     needs:
       - process-inputs
       - update-valkey-container
+      - prod-approval
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.trigger_bundle == 'true' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 355
+    permissions:
+      contents: read
     steps:
-      - name: Generate token
-        if: needs.process-inputs.outputs.trigger_bundle == 'true' && github.repository_owner == 'valkey-io'
-        id: generate-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+      - name: Wait for exact public base images
+        env:
+          VERSION: ${{ needs.process-inputs.outputs.version }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 21000))
+          while (( SECONDS < deadline )); do
+            alpine=$(curl -sS -o /dev/null -w '%{http_code}' "https://hub.docker.com/v2/repositories/valkey/valkey/tags/${VERSION}-alpine/")
+            trixie=$(curl -sS -o /dev/null -w '%{http_code}' "https://hub.docker.com/v2/repositories/valkey/valkey/tags/${VERSION}-trixie/")
+            if [[ "$alpine" == "200" && "$trixie" == "200" ]]; then
+              echo "Public images ${VERSION}-alpine and ${VERSION}-trixie are available."
+              exit 0
+            fi
+            echo "Waiting for public images (alpine=$alpine trixie=$trixie). Merge the valkey-container update PR if it is ready."
+            sleep 120
+          done
+          echo "Timed out waiting for exact public images for $VERSION; Bundle was not dispatched." >&2
+          exit 1
+
+      - name: Generate Bundle dispatch token
+        id: token
+        if: github.repository_owner == 'valkey-io'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: valkey-bundle
+          permission-contents: write
+          permission-metadata: read
 
-      - name: Trigger Valkey Bundle Update
-        if: needs.process-inputs.outputs.trigger_bundle == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
+      - name: Trigger Valkey Bundle update
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # v3
         with:
-          token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
+          token: ${{ github.repository_owner == 'valkey-io' && steps.token.outputs.token || secrets.AUTOMATION_PAT }}
           repository: ${{ github.repository_owner }}/valkey-bundle
           event-type: valkey-release
-          client-payload: >
-            {
-              "version": "${{ needs.process-inputs.outputs.version }}",
-              "component": "valkey"
-            }
+          client-payload: '{"version":"${{ needs.process-inputs.outputs.version }}","component":"valkey"}'

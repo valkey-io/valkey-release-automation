@@ -15,12 +15,22 @@ on:
 jobs:
   build-new-docker:
     runs-on: ubuntu-latest
+    env:
+      # Single source of truth for the bashbrew action pin. The uses: line
+      # below cannot read env, so it must carry the same SHA literally;
+      # the scripts path is derived from THIS variable and the generate
+      # step verifies the derived directory exists, so a uses: bump that
+      # forgets this variable fails loudly instead of running stale
+      # scripts.
+      BASHBREW_REF: 9eef708e6a0b1b5d8bbda769c766777fe45026eb # v0.1.13
     outputs:
       bashbrew_json: ${{ steps.generate-bashbrew.outputs.bashbrew_content }}
     steps:
       - name: Validate inputs
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
             echo "Invalid version format. Expected format: x.y.z or 'unstable'"
             exit 1
           fi
@@ -28,52 +38,62 @@ jobs:
       - name: Generate token
         id: generate-token
         if: github.repository_owner == 'valkey-io'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: valkey-container,valkey-release-automation
+          repositories: valkey-container
+          # Security: without explicit permission-* inputs the minted token
+          # inherits the App's FULL installation grant. This workflow checks
+          # out valkey-container, commits, pushes a branch, and opens a PR
+          # via peter-evans/create-pull-request: contents write covers the
+          # git fetch/push, pull-requests write covers PR creation, and
+          # metadata read covers the repository API lookups both actions
+          # perform. Nothing else is granted.
+          permission-contents: write
+          permission-pull-requests: write
+          permission-metadata: read
       
       - name: Set up bashbrew
-        uses: docker-library/bashbrew@v0.1.13
+        # This SHA must equal env.BASHBREW_REF above (uses: cannot read
+        # env); the path-derivation check in the generate step catches a
+        # mismatch at run time.
+        uses: docker-library/bashbrew@9eef708e6a0b1b5d8bbda769c766777fe45026eb # v0.1.13
       
       - name: Check if bashbrew is installed
         run: |
           bashbrew --version
 
       - name: Checkout valkey-release-automation
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ github.repository_owner }}/valkey-release-automation
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: valkey-release-automation
+          persist-credentials: false
 
       - name: Checkout valkey-container
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-container
           path: valkey-container
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
 
-      - name: Checkout valkey-release-automation
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/valkey-release-automation
-          path: valkey-release-automation
-          token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
-
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
           python-version: '3.x'
       
       - name: Strip patch version
         id: strip_version
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if [[ "${{ inputs.version }}" == "unstable" ]]; then
+          if [[ "$VERSION" == "unstable" ]]; then
             echo "Version is unstable"
             echo "stripped_version=unstable" >> $GITHUB_OUTPUT
-          elif [[ "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+(-rc[0-9]+)?$ ]]; then
+          elif [[ "$VERSION" =~ ^([0-9]+\.[0-9]+)\.[0-9]+(-rc[0-9]+)?$ ]]; then
             stripped_version="${BASH_REMATCH[1]}"
             echo "Stripped version: $stripped_version"
             echo "stripped_version=$stripped_version" >> $GITHUB_OUTPUT
@@ -85,23 +105,23 @@ jobs:
       
       - name: Update new version
         id: version-update
+        env:
+          VERSION: ${{ inputs.version }}
+          STRIPPED_VERSION: ${{ steps.strip_version.outputs.stripped_version }}
         run: |
             cd valkey-container
-            # Download the scripts for bashbrew in local
             jqt='.jq-template.awk'
             wget -qO "$jqt" 'https://github.com/docker-library/bashbrew/raw/9f6a35772ac863a0241f147c820354e4008edf38/scripts/jq-template.awk'
             jqf='.template-helper-functions.jq'
             wget -qO "$jqf" 'https://github.com/docker-library/bashbrew/raw/08c926140ad0af22de58c2a2656afda58082ba3e/scripts/template-helper-functions.jq'
 
-            # Run update script
-            ./update.sh ${{ steps.strip_version.outputs.stripped_version }}
+            ./update.sh "$STRIPPED_VERSION"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add .
             
-            # Only commit if there are changes
             if ! git diff --cached --quiet; then
-              git commit -m "Update versions.json and Dockerfiles for version ${{ inputs.version }}" -s
+              git commit -m "Update versions.json and Dockerfiles for version $VERSION" -s
               echo "has_changes=true" >> $GITHUB_OUTPUT
             else
               echo "No changes to commit for version update - PR will not be created."
@@ -110,17 +130,18 @@ jobs:
 
       - name: Update container aliases
         id: alias-update
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           cd valkey-container
           python ../valkey-release-automation/scripts/automate_alias_update.py \
             generate-stackbrew-library.sh \
-            ${{ inputs.version }}
+            "$VERSION"
           
           git add generate-stackbrew-library.sh
           
-          # Only commit if there are changes
           if ! git diff --cached --quiet; then
-            git commit -m "Update container aliases for version ${{ inputs.version }}" -s
+            git commit -m "Update container aliases for version $VERSION" -s
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
             echo "No changes to commit for aliases - PR will not be created."
@@ -131,7 +152,16 @@ jobs:
         id: generate-bashbrew
         run: |
           cd valkey-container
-          BASHBREW_SCRIPTS=/home/runner/work/_actions/docker-library/bashbrew/v0.1.13/scripts
+          # The action directory on the runner is named after the pinned
+          # ref; derive it from the shared BASHBREW_REF env var instead of
+          # hardcoding the SHA a second time. If the uses: pin was bumped
+          # without BASHBREW_REF this directory does not exist and we fail
+          # here rather than running a stale checkout's scripts.
+          BASHBREW_SCRIPTS="/home/runner/work/_actions/docker-library/bashbrew/${BASHBREW_REF}/scripts"
+          if [[ ! -d "$BASHBREW_SCRIPTS" ]]; then
+            echo "::error::BASHBREW_REF ($BASHBREW_REF) does not match the checked-out bashbrew action; update env.BASHBREW_REF and the uses: pin together."
+            exit 1
+          fi
           "$BASHBREW_SCRIPTS/github-actions/generate.sh" > bashbrew_output.json
           echo "bashbrew_content=$(cat bashbrew_output.json)" >> $GITHUB_OUTPUT
           rm bashbrew_output.json
@@ -141,7 +171,7 @@ jobs:
           steps.version-update.outputs.has_changes == 'true' || 
           steps.alias-update.outputs.has_changes == 'true'
         id: create-pr
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
           path: valkey-container

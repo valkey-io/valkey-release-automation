@@ -177,13 +177,36 @@ echo "::group::Download Valkey source"
 
 cd $BUILD_ROOT/SOURCES
 
+# SHA-pinned builds (qualification and pinned releases) build from an exact
+# commit: when the caller mounts a source tarball (VALKEY_SOURCE_TARBALL),
+# use it instead of downloading a tag/branch archive, so the build cannot
+# drift from the requested SHA.
+if [ -n "${VALKEY_SOURCE_TARBALL:-}" ] && [ -f "${VALKEY_SOURCE_TARBALL}" ]; then
+  echo "Using mounted source tarball ${VALKEY_SOURCE_TARBALL}"
+  cp "${VALKEY_SOURCE_TARBALL}" "valkey-${VALKEY_VERSION}.tar.gz"
+fi
+
 # Download main source if not present
 if [ ! -f "valkey-${VALKEY_VERSION}.tar.gz" ]; then
   echo "Downloading Valkey ${VALKEY_VERSION}..."
   if ! wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}/valkey-${VALKEY_VERSION}.tar.gz; then
-    # Tag not yet released — try the MAJOR.MINOR branch and repack
+    # Security: every version reaching this script is release-formatted
+    # (packages.yml validates x.y.z / x.y.z-rcN before the matrix), so a
+    # failed tag download on a release build must fail loudly. Silently
+    # repackaging the moving MAJOR.MINOR branch under the release version
+    # would ship whatever the branch HEAD happens to be as if it were the
+    # tagged, qualified release. The branch fallback exists solely for
+    # pre-tag testing of packaging changes and is reachable only when the
+    # caller explicitly opts in with ALLOW_BRANCH_FALLBACK=true (the
+    # pull_request dev path in packages.yml sets it; release paths never do).
+    if [ "${ALLOW_BRANCH_FALLBACK:-}" != "true" ]; then
+      echo "ERROR: tag download failed for ${VALKEY_VERSION}; refusing to fall back to the moving branch for a release build."
+      echo "Verify the tag exists, or pass an exact source_sha. ALLOW_BRANCH_FALLBACK=true is reserved for pre-tag dev/PR builds."
+      exit 1
+    fi
+    # Pre-tag testing only: try the MAJOR.MINOR branch and repack
     BRANCH_REF="${VALKEY_VERSION%.*}"
-    echo "Tag ${VALKEY_VERSION} not found, trying branch ${BRANCH_REF}..."
+    echo "Tag ${VALKEY_VERSION} not found, trying branch ${BRANCH_REF} (ALLOW_BRANCH_FALLBACK=true)..."
     wget -q https://github.com/valkey-io/valkey/archive/refs/heads/${BRANCH_REF}.tar.gz
     # GitHub branch archives extract to valkey-BRANCH; rpmbuild %setup expects valkey-VERSION
     mkdir -p /tmp/repack

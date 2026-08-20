@@ -22,8 +22,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate inputs
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
             echo "Invalid version format. Expected format: x.y.z or 'unstable'"
             exit 1
           fi
@@ -31,26 +33,38 @@ jobs:
       - name: Generate token
         id: generate-token
         if: github.repository_owner == 'valkey-io'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: valkey-io.github.io
+          # Security: without explicit permission-* inputs the minted token
+          # inherits the App's FULL installation grant. This workflow checks
+          # out valkey-io.github.io, commits release page updates, pushes a
+          # branch, and opens a PR via peter-evans/create-pull-request:
+          # contents write covers the git fetch/push, pull-requests write
+          # covers PR creation, and metadata read covers the repository API
+          # lookups both actions perform. Nothing else is granted.
+          permission-contents: write
+          permission-pull-requests: write
+          permission-metadata: read
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
           python-version: '3.x'
 
       - name: Checkout automation scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ github.repository_owner }}/valkey-release-automation
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: valkey-release-automation
+          persist-credentials: false
 
       - name: Checkout website repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-io.github.io
           path: valkey-io.github.io
@@ -58,33 +72,35 @@ jobs:
 
       - name: Format version for filename
         id: format-version
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
-          if [[ "$VERSION" == *"-rc"* ]]; then
-            VERSION_DASHED=${VERSION//./-}
-          else
-            VERSION_DASHED=${VERSION//./-}
-          fi
+          VERSION_DASHED=${VERSION//./-}
           echo "version_dashed=$VERSION_DASHED" >> $GITHUB_OUTPUT
 
       - name: Update Website Release File
         id: update-website
+        # bashbrew_json is a large caller-supplied JSON blob; it must reach
+        # the script through env, never by expression interpolation.
+        env:
+          VERSION: ${{ inputs.version }}
+          BASHBREW_JSON: ${{ inputs.bashbrew_json }}
+          VERSION_DASHED: ${{ steps.format-version.outputs.version_dashed }}
         run: |
           python valkey-release-automation/scripts/automate_website_description.py \
-            ${{ inputs.version }} \
+            "$VERSION" \
             valkey-io.github.io/templates/valkey-website-template.md \
-            '${{ inputs.bashbrew_json }}' \
+            "$BASHBREW_JSON" \
             valkey-io.github.io/content/download/releases
 
           cd valkey-io.github.io
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          git add "content/download/releases/v${{ steps.format-version.outputs.version_dashed }}.md"
+          git add "content/download/releases/v${VERSION_DASHED}.md"
 
-          # Only commit if there are changes
           if ! git diff --cached --quiet; then
-            git commit -m "Updates downloads section for version ${{ inputs.version }}"
+            git commit -s -m "Updates downloads section for version $VERSION"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
             echo "No changes to commit for website update"
@@ -95,10 +111,9 @@ jobs:
         id: update-try-valkey
         if: inputs.try_valkey_uploaded == 'true'
         working-directory: valkey-io.github.io
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
-          
-          # Update the try-valkey page with new version
           cat > content/try-valkey/_index.md << EOF
           +++
           title = "Try Valkey"
@@ -114,9 +129,8 @@ jobs:
           
           git add content/try-valkey/_index.md
 
-          # Check if there are changes for Try Valkey
           if ! git diff --cached --quiet content/try-valkey/_index.md; then
-            git commit -m "Update Try Valkey to version ${{ inputs.version }}"
+            git commit -s -m "Update Try Valkey to version $VERSION"
             echo "has_try_valkey_changes=true" >> $GITHUB_OUTPUT
           else
             echo "No changes to commit for Try Valkey update."
@@ -125,7 +139,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.update-website.outputs.has_changes == 'true' || steps.update-try-valkey.outputs.has_try_valkey_changes == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
           path: valkey-io.github.io
@@ -140,7 +154,7 @@ jobs:
             This pull request updates the valkey website for the new release ${{ inputs.version }}.
             
             Changes:
-            ${{ steps.update-website.outputs.has_changes == 'true' && format('- Updated downloads page with new release information') || '' }}
+            ${{ steps.update-website.outputs.has_changes == 'true' && '- Updated downloads page with new release information' || '' }}
             ${{ steps.update-try-valkey.outputs.has_try_valkey_changes == 'true' && format('- Updated Try Valkey page to use version {0}', inputs.version) || '' }}
 
             This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)

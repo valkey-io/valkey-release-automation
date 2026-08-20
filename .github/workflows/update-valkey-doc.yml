@@ -14,8 +14,9 @@ jobs:
     steps:
       - name: Check release type
         id: check-release
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
           PATCH=$(echo "$VERSION" | cut -d. -f3 | sed 's/-rc[0-9]*//')
           MINOR_VERSION=$(echo "$VERSION" | cut -d. -f1,2)
           
@@ -37,16 +38,27 @@ jobs:
       - name: Generate token
         if: (steps.check-release.outputs.is_major_minor == 'true' || steps.check-release.outputs.is_patch == 'true') && github.repository_owner == 'valkey-io'
         id: generate-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: valkey-doc
+          # Security: without explicit permission-* inputs the minted token
+          # inherits the App's FULL installation grant. This workflow checks
+          # out valkey-doc, pushes a release tag (patch path), and pushes a
+          # branch plus opens a PR via peter-evans/create-pull-request
+          # (major/minor path): contents write covers the git fetch, tag
+          # push, and branch push, pull-requests write covers PR creation,
+          # and metadata read covers the repository API lookups both actions
+          # perform. Nothing else is granted.
+          permission-contents: write
+          permission-pull-requests: write
+          permission-metadata: read
 
       - name: Checkout valkey-doc for patch
         if: steps.check-release.outputs.is_patch == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-doc
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
@@ -60,10 +72,10 @@ jobs:
       - name: Create tag in valkey-doc
         if: steps.check-release.outputs.is_patch == 'true'
         working-directory: valkey-doc
+        env:
+          VERSION: ${{ inputs.version }}
+          PREVIOUS: ${{ steps.check-release.outputs.previous_patch_version }}
         run: |
-          VERSION="${{ inputs.version }}"
-          PREVIOUS="${{ steps.check-release.outputs.previous_patch_version }}"
-
           # Verify the previous tag exists
           if ! git rev-parse "refs/tags/${PREVIOUS}" >/dev/null 2>&1; then
             echo "::error::Previous tag '${PREVIOUS}' does not exist in valkey-doc. Cannot create tag '${VERSION}'."
@@ -97,7 +109,7 @@ jobs:
 
       - name: Checkout valkey
         if: steps.check-release.outputs.is_major_minor == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey
           ref: ${{ inputs.version }}
@@ -111,7 +123,7 @@ jobs:
 
       - name: Checkout valkey-doc
         if: steps.check-release.outputs.is_major_minor == 'true'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-doc
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
@@ -119,7 +131,7 @@ jobs:
 
       - name: Setup Ruby
         if: steps.check-release.outputs.is_major_minor == 'true'
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: '3.0'
 
@@ -131,8 +143,9 @@ jobs:
       - name: Update supported versions
         if: steps.check-release.outputs.is_major_minor == 'true'
         working-directory: valkey-doc
+        env:
+          MINOR_VERSION: ${{ steps.check-release.outputs.minor_version }}
         run: |
-          MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
           MINOR_NUM=$(echo "$MINOR_VERSION" | cut -d. -f2)
           
           TODAY=$(date +%Y-%m-%d)
@@ -151,8 +164,9 @@ jobs:
       - name: Update Makefile
         if: steps.check-release.outputs.is_major_minor == 'true'
         working-directory: valkey-doc
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          VERSION="${{ inputs.version }}"
           DATE=$(date +%Y-%m-%d)
           
           sed -i "s/^VERSION ?= .*/VERSION ?= $VERSION/" Makefile
@@ -161,9 +175,9 @@ jobs:
       - name: Update valkey.conf.md
         if: steps.check-release.outputs.is_major_minor == 'true'
         working-directory: valkey-doc
+        env:
+          MINOR_VERSION: ${{ steps.check-release.outputs.minor_version }}
         run: |
-          MINOR_VERSION="${{ steps.check-release.outputs.minor_version }}"
-          
           NEW_LINE="* The self documented [valkey.conf for Valkey $MINOR_VERSION](https://raw.githubusercontent.com/valkey-io/valkey/$MINOR_VERSION/valkey.conf)."
           
           LINE_NUM=$(grep -n "The self documented \[valkey.conf for Valkey" topics/valkey.conf.md | head -1 | cut -d: -f1)
@@ -172,7 +186,7 @@ jobs:
 
       - name: Create Pull Request
         if: steps.check-release.outputs.is_major_minor == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
           path: valkey-doc
