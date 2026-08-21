@@ -7,6 +7,10 @@ on:
         type: string
         description: "Version of the package to build"
         required: true
+      release_owner:
+        type: string
+        description: "GitHub login that approved the production release"
+        required: true
       bashbrew_json:
         type: string
         description: "Bashbrew output from docker automation"
@@ -138,6 +142,7 @@ jobs:
           fi
 
       - name: Create Pull Request
+        id: create-pr
         if: steps.update-website.outputs.has_changes == 'true' || steps.update-try-valkey.outputs.has_try_valkey_changes == 'true'
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
@@ -158,3 +163,10 @@ jobs:
             ${{ steps.update-try-valkey.outputs.has_try_valkey_changes == 'true' && format('- Updated Try Valkey page to use version {0}', inputs.version) || '' }}
 
             This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)
+
+      - name: Notify release owner
+        if: steps.create-pr.outputs.pull-request-operation == 'created'
+        env:
+          GH_TOKEN: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
+          RELEASE_OWNER: ${{ inputs.release_owner }}
+        run: gh pr comment "${{ steps.create-pr.outputs.pull-request-number }}" --repo "${{ github.repository_owner }}/valkey-io.github.io" --body "@$RELEASE_OWNER, please review this automated release PR."

@@ -178,8 +178,11 @@ jobs:
     permissions:
       actions: read
       contents: read
+    outputs:
+      release_owner: ${{ steps.approver.outputs.login }}
     steps:
       - name: Confirm production dispatch
+        id: approver
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -195,7 +198,7 @@ jobs:
           ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
           REVIEWERS=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$ENVIRONMENT")
           PREVENT_SELF=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | any' <<< "$ENVIRONMENT")
-          ADMIN_BYPASS=$(jq -r '.can_admins_bypass // true' <<< "$ENVIRONMENT")
+          ADMIN_BYPASS=$(jq -r 'if has("can_admins_bypass") then .can_admins_bypass else true end' <<< "$ENVIRONMENT")
           CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
           POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
           [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
@@ -216,6 +219,7 @@ jobs:
             echo "The workflow dispatcher cannot approve their own production deployment" >&2
             exit 1
           }
+          echo "login=$APPROVER" >> "$GITHUB_OUTPUT"
           echo "Production dispatch approved by @$APPROVER through release-publish."
 
   update-valkey-hashes:
@@ -240,6 +244,7 @@ jobs:
     uses: ./.github/workflows/update-valkey-container.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      release_owner: ${{ needs.prod-approval.outputs.release_owner }}
     secrets: inherit
 
   update-valkey-doc:
@@ -251,6 +256,7 @@ jobs:
     uses: ./.github/workflows/update-valkey-doc.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      release_owner: ${{ needs.prod-approval.outputs.release_owner }}
     secrets: inherit
 
   update-valkey-helm:
@@ -262,6 +268,7 @@ jobs:
     uses: ./.github/workflows/update-valkey-helm.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
+      release_owner: ${{ needs.prod-approval.outputs.release_owner }}
     secrets: inherit
 
   generate-build-matrix:
@@ -417,6 +424,7 @@ jobs:
       # 'true' only when the Try Valkey upload job succeeded AND emitted
       # true; on failure or skip the pointer stays 'false'.
       try_valkey_uploaded: ${{ (needs.update-try-valkey.result == 'success' && needs.update-try-valkey.outputs.try_valkey_uploaded == 'true') && 'true' || 'false' }}
+      release_owner: ${{ needs.prod-approval.outputs.release_owner }}
     secrets: inherit
 
   trigger-valkey-bundle:

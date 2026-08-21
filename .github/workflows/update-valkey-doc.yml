@@ -7,6 +7,10 @@ on:
         type: string
         description: "Version of the release"
         required: true
+      release_owner:
+        type: string
+        description: "GitHub login that approved the production release"
+        required: true
 
 jobs:
   update-valkey-doc:
@@ -185,6 +189,7 @@ jobs:
           sed -i "${LINE_NUM}i\\${NEW_LINE}" topics/valkey.conf.md
 
       - name: Create Pull Request
+        id: create-pr
         if: steps.check-release.outputs.is_major_minor == 'true'
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
@@ -207,3 +212,10 @@ jobs:
             - Added new valkey.conf link
 
             This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)
+
+      - name: Notify release owner
+        if: steps.create-pr.outputs.pull-request-operation == 'created'
+        env:
+          GH_TOKEN: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
+          RELEASE_OWNER: ${{ inputs.release_owner }}
+        run: gh pr comment "${{ steps.create-pr.outputs.pull-request-number }}" --repo "${{ github.repository_owner }}/valkey-doc" --body "@$RELEASE_OWNER, please review this automated release PR."

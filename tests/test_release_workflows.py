@@ -48,6 +48,9 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn('CURRENT_SHA=$(gh api "repos/${REPO}/commits/main"', text)
         self.assertIn('"$GITHUB_SHA" == "$CURRENT_SHA"', text)
         self.assertIn("Production automation is stale:", text)
+        self.assertIn("release-publish must disable admin bypass", text)
+        self.assertIn('if has("can_admins_bypass") then .can_admins_bypass else true end', text)
+        self.assertNotIn(".can_admins_bypass // true", text)
 
     def test_archive_and_package_builds_use_exact_source_sha(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
@@ -138,6 +141,28 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("standalone-approval:", packages)
         self.assertIn("release_gate_passed:", packages)
         self.assertEqual(packages.count("environment: release-publish"), 1)
+
+    def test_downstream_prs_notify_the_production_approver_once(self) -> None:
+        build = workflow("build-release.yml")
+        self.assertIn("release_owner: ${{ steps.approver.outputs.login }}", build)
+        self.assertIn('echo "login=$APPROVER" >> "$GITHUB_OUTPUT"', build)
+        self.assertEqual(
+            build.count("release_owner: ${{ needs.prod-approval.outputs.release_owner }}"),
+            4,
+        )
+        for name in (
+            "update-valkey-container.yml",
+            "update-valkey-doc.yml",
+            "update-valkey-helm.yml",
+            "update-valkey-website.yml",
+        ):
+            text = workflow(name)
+            self.assertIn("release_owner:", text, name)
+            self.assertIn("id: create-pr", text, name)
+            self.assertIn("- name: Notify release owner", text, name)
+            self.assertIn("please review this automated release PR", text, name)
+            self.assertIn("steps.create-pr.outputs.pull-request-operation == 'created'", text, name)
+            self.assertIn("gh pr comment", text, name)
 
     def test_helm_update_is_reviewable_and_cannot_publish_a_chart(self) -> None:
         text = workflow("update-valkey-helm.yml")
