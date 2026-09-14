@@ -67,9 +67,45 @@ jobs:
     runs-on: ubuntu-latest
     environment: release-publish
     permissions:
+      actions: read
       contents: read
     steps:
-      - run: echo "Standalone package publication approved."
+      - name: Confirm standalone production dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          CURRENT_SHA=$(gh api "repos/${REPO}/commits/main" --jq '.sha')
+          [[ "$GITHUB_SHA" == "$CURRENT_SHA" ]] || {
+            echo "Standalone publication must run from current main: run=$GITHUB_SHA current-main=$CURRENT_SHA" >&2
+            exit 1
+          }
+
+          ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
+          REVIEWERS=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$ENVIRONMENT")
+          PREVENT_SELF=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | any' <<< "$ENVIRONMENT")
+          ADMIN_BYPASS=$(jq -r 'if has("can_admins_bypass") then .can_admins_bypass else true end' <<< "$ENVIRONMENT")
+          CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
+          POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
+          [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
+          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
+          [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
+          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
+            echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
+            exit 1
+          }
+
+          APPROVER=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
+          [[ -n "$APPROVER" ]] || { echo "No human approval record exists for release-publish" >&2; exit 1; }
+          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
+            echo "The workflow dispatcher cannot approve their own production deployment" >&2
+            exit 1
+          }
+          echo "Standalone package publication approved by @$APPROVER through release-publish."
 
   ############################################################################
   # Process Inputs
@@ -81,6 +117,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.derive.outputs.version }}
+      source_sha: ${{ steps.derive.outputs.source_sha }}
       rpm_matrix: ${{ steps.matrix.outputs.rpm }}
       deb_matrix: ${{ steps.matrix.outputs.deb }}
     steps:
@@ -103,15 +140,46 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          PUBLISH: ${{ inputs.publish }}
           EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
+          REPO_OWNER: ${{ github.repository_owner }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           # Validate the explicit version input FIRST, before any other use.
           if [ -n "$VERSION" ] && [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
             echo "ERROR: Invalid version format '${VERSION}'."
             echo "Expected: x.y.z or x.y.z-rcN (e.g., 9.0.3, 8.1.0-rc1)"
             exit 1
+          fi
+          if [[ -n "$SOURCE_SHA" && ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: source_sha must be a full lowercase 40-character commit SHA."
+            exit 1
+          fi
+
+          # A publishing run must be bound to the immutable commit behind the
+          # release tag. Resolve it once here and pass that exact SHA to every
+          # package build, even when the standalone dispatcher omitted it.
+          if [[ "$PUBLISH" == "true" ]]; then
+            REF=$(gh api "repos/${REPO_OWNER}/valkey/git/ref/tags/${VERSION}")
+            TYPE=$(jq -r '.object.type' <<< "$REF")
+            TAG_SHA=$(jq -r '.object.sha' <<< "$REF")
+            if [[ "$TYPE" == "tag" ]]; then
+              TAG=$(gh api "repos/${REPO_OWNER}/valkey/git/tags/${TAG_SHA}")
+              TYPE=$(jq -r '.object.type' <<< "$TAG")
+              TAG_SHA=$(jq -r '.object.sha' <<< "$TAG")
+            fi
+            [[ "$TYPE" == "commit" && "$TAG_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "ERROR: release tag $VERSION does not resolve to a commit."
+              exit 1
+            }
+            if [[ -n "$SOURCE_SHA" && "$SOURCE_SHA" != "$TAG_SHA" ]]; then
+              echo "ERROR: source_sha $SOURCE_SHA does not match release tag $VERSION at $TAG_SHA."
+              exit 1
+            fi
+            SOURCE_SHA="$TAG_SHA"
           fi
 
           # Resolve the newest release tag for a MAJOR.MINOR line from the
@@ -181,6 +249,7 @@ jobs:
 
           echo "versions=${VERSIONS_JSON}" >> "$GITHUB_OUTPUT"
           echo "version=${PRIMARY}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
           echo "Versions: ${VERSIONS_JSON}"
           echo "Primary version: ${PRIMARY}"
 
@@ -216,9 +285,9 @@ jobs:
           persist-credentials: false
 
       - name: Fetch source at exact commit
-        if: inputs.source_sha != ''
+        if: needs.process-inputs.outputs.source_sha != ''
         env:
-          SHA: ${{ inputs.source_sha }}
+          SHA: ${{ needs.process-inputs.outputs.source_sha }}
           VERSION: ${{ matrix.version }}
           REPO_OWNER: ${{ github.repository_owner }}
         run: |
@@ -239,7 +308,7 @@ jobs:
           PLATFORM_ID: ${{ matrix.platform.id }}
           EPEL_PACKAGE: ${{ matrix.platform.epel }}
           CONTAINER_IMAGE: ${{ matrix.platform.container }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ needs.process-inputs.outputs.source_sha }}
           # Security: the moving-branch fallback in build-rpm.sh is opt-in
           # and reserved for the pull_request (dev) path, where packaging
           # changes may target a version whose tag is not cut yet. Release
@@ -318,9 +387,9 @@ jobs:
           platforms: arm64
 
       - name: Fetch source at exact commit
-        if: inputs.source_sha != ''
+        if: needs.process-inputs.outputs.source_sha != ''
         env:
-          SHA: ${{ inputs.source_sha }}
+          SHA: ${{ needs.process-inputs.outputs.source_sha }}
           VERSION: ${{ matrix.version }}
           REPO_OWNER: ${{ github.repository_owner }}
         run: |
@@ -341,7 +410,7 @@ jobs:
           PLATFORM_CODENAME: ${{ matrix.platform.codename }}
           APT_SNAPSHOT: ${{ matrix.platform.apt_snapshot || '' }}
           CONTAINER_IMAGE: ${{ matrix.platform.container }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ needs.process-inputs.outputs.source_sha }}
           # Security: the moving-branch fallback in build-deb.sh is opt-in
           # and reserved for the pull_request (dev) path, where packaging
           # changes may target a version whose tag is not cut yet. Release

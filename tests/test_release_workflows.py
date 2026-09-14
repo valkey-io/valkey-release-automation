@@ -60,6 +60,16 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("source_sha:", packages)
         self.assertIn("valkey/archive/${SHA}.tar.gz", packages)
         self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", packages)
+        self.assertIn('SOURCE_SHA="$TAG_SHA"', packages)
+        self.assertIn("source_sha: ${{ steps.derive.outputs.source_sha }}", packages)
+        self.assertEqual(
+            packages.count("SOURCE_SHA: ${{ needs.process-inputs.outputs.source_sha }}"),
+            2,
+        )
+        self.assertEqual(
+            packages.count("          SHA: ${{ needs.process-inputs.outputs.source_sha }}"),
+            2,
+        )
 
     def test_candidate_code_never_shares_a_job_with_oidc(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
@@ -141,6 +151,16 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("standalone-approval:", packages)
         self.assertIn("release_gate_passed:", packages)
         self.assertEqual(packages.count("environment: release-publish"), 1)
+
+    def test_standalone_publish_paths_fail_closed(self) -> None:
+        for name in ("packages.yml", "update-try-valkey.yml"):
+            text = workflow(name)
+            self.assertIn("actions: read", text, name)
+            self.assertIn("release-publish must require a reviewer", text, name)
+            self.assertIn("release-publish must prevent self-review", text, name)
+            self.assertIn("release-publish must disable admin bypass", text, name)
+            self.assertIn("release-publish must allow exactly the main branch", text, name)
+            self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text, name)
 
     def test_downstream_prs_notify_the_production_approver_once(self) -> None:
         build = workflow("build-release.yml")

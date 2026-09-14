@@ -54,9 +54,46 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && contains(github.workflow_ref, 'update-try-valkey.yml')
     runs-on: ubuntu-latest
     environment: release-publish
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Confirm standalone production dispatch
-        run: echo "Standalone production dispatch approved through the release-publish protected environment."
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          CURRENT_SHA=$(gh api "repos/${REPO}/commits/main" --jq '.sha')
+          [[ "$GITHUB_SHA" == "$CURRENT_SHA" ]] || {
+            echo "Standalone publication must run from current main: run=$GITHUB_SHA current-main=$CURRENT_SHA" >&2
+            exit 1
+          }
+
+          ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
+          REVIEWERS=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$ENVIRONMENT")
+          PREVENT_SELF=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | any' <<< "$ENVIRONMENT")
+          ADMIN_BYPASS=$(jq -r 'if has("can_admins_bypass") then .can_admins_bypass else true end' <<< "$ENVIRONMENT")
+          CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
+          POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
+          [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
+          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
+          [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
+          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
+            echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
+            exit 1
+          }
+
+          APPROVER=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" \
+            --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
+          [[ -n "$APPROVER" ]] || { echo "No human approval record exists for release-publish" >&2; exit 1; }
+          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
+            echo "The workflow dispatcher cannot approve their own production deployment" >&2
+            exit 1
+          }
+          echo "Standalone Try Valkey publication approved by @$APPROVER through release-publish."
 
   build-try-valkey:
     needs: prod-approval
