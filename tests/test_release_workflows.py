@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -161,6 +162,38 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertIn("release-publish must disable admin bypass", text, name)
             self.assertIn("release-publish must allow exactly the main branch", text, name)
             self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text, name)
+
+    def test_eol_debian_build_and_test_use_immutable_package_snapshot(self) -> None:
+        platforms = json.loads(
+            Path(".github/package-platforms.json").read_text(encoding="utf-8")
+        )
+        debian11 = next(
+            platform
+            for platform in platforms["deb"]["platform"]
+            if platform["id"] == "debian11"
+        )
+        self.assertRegex(debian11["apt_snapshot"], r"^\d{8}T\d{6}Z$")
+
+        workflow_text = workflow("packages.yml")
+        self.assertIn(
+            "APT_SNAPSHOT: ${{ matrix.platform.apt_snapshot || '' }}", workflow_text
+        )
+        self.assertIn('-e APT_SNAPSHOT="$APT_SNAPSHOT"', workflow_text)
+        self.assertIn(
+            '-e APT_SNAPSHOT="${{ matrix.platform.apt_snapshot || \'\' }}"',
+            workflow_text,
+        )
+        self.assertIn(
+            "snapshot.debian.org/archive/debian/${APT_SNAPSHOT}", workflow_text
+        )
+        self.assertIn("committing a systemd-less image", workflow_text)
+
+        script = Path("scripts/build-deb.sh").read_text(encoding="utf-8")
+        self.assertIn("snapshot.debian.org/archive/debian/${APT_SNAPSHOT}", script)
+        self.assertIn(
+            "snapshot.debian.org/archive/debian-security/${APT_SNAPSHOT}", script
+        )
+        self.assertIn("check-valid-until=no", script)
 
     def test_downstream_prs_notify_the_production_approver_once(self) -> None:
         build = workflow("build-release.yml")
