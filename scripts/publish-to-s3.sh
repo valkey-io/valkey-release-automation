@@ -111,6 +111,13 @@ for dir in "${ARTIFACTS_DIR}"/valkey-debs-*/; do
   done
 
   cd "$dest"
+  # Packages and .deb files live together in this per-arch dir, so
+  # dpkg-scanpackages emits "Filename: ./<pkg>.deb". apt resolves Filename
+  # relative to the sources.list base URI, NOT the dir holding Packages, so
+  # the generated apt line must point the base URI at THIS arch dir with a
+  # "./" distribution (see scripts/pages/index.html deb-step3). Keep the two
+  # in sync: a base URI of the platform dir with an "${ARCH}/" distribution
+  # looks for the .deb one level up and 403s. (issue #4650)
   dpkg-scanpackages --arch "$arch" . > Packages
   gzip -9 -k -f Packages
 

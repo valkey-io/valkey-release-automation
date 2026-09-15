@@ -495,7 +495,7 @@
       document.getElementById("deb-step3").textContent =
         "ARCH=$(dpkg --print-architecture)\n" +
         "echo \"deb [signed-by=/usr/share/keyrings/valkey-archive-keyring.gpg] " +
-        repoBase + "/deb/" + os + "/ ${ARCH}/\" \\\n" +
+        repoBase + "/deb/" + os + "/${ARCH}/ ./\" \\\n" +
         "  | sudo tee /etc/apt/sources.list.d/valkey.list";
       document.getElementById("deb-step4").textContent =
         "sudo apt-get update\nsudo apt-get install -y valkey-server";
