@@ -22,7 +22,7 @@
   "deb": {
     "arch": ["amd64", "arm64"],
     "platform": [
-      { "name": "Debian 11 (Bullseye)", "container": "debian:11",    "id": "debian11",   "codename": "bullseye" },
+      { "name": "Debian 11 (Bullseye)", "container": "debian:11",    "id": "debian11",   "codename": "bullseye", "apt_snapshot": "20260831T235959Z" },
       { "name": "Debian 12 (Bookworm)", "container": "debian:12",    "id": "debian12",   "codename": "bookworm" },
       { "name": "Debian 13 (Trixie)",   "container": "debian:trixie","id": "debian13",   "codename": "trixie" },
       { "name": "Ubuntu 22.04 (Jammy)", "container": "ubuntu:22.04", "id": "ubuntu2204", "codename": "jammy" },

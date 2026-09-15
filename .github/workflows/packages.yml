@@ -220,6 +220,7 @@ jobs:
             --platform="$DOCKER_PLATFORM" \
             -e PLATFORM_ID="${{ matrix.platform.id }}" \
             -e PLATFORM_CODENAME="${{ matrix.platform.codename }}" \
+            -e APT_SNAPSHOT="${{ matrix.platform.apt_snapshot || '' }}" \
             -e VALKEY_VERSION="${VALKEY_VERSION}" \
             -e EXPECTED_ARCH="${{ matrix.arch }}" \
             -e DEBIAN_FRONTEND=noninteractive \
@@ -430,7 +431,29 @@ jobs:
             sleep infinity
 
           echo "Installing systemd prerequisites..."
-          docker exec "${CONTAINER_NAME}-setup" bash -c '
+          docker exec \
+            -e APT_SNAPSHOT="${{ matrix.platform.apt_snapshot || '' }}" \
+            -e PLATFORM_CODENAME="${{ matrix.platform.codename }}" \
+            "${CONTAINER_NAME}-setup" bash -c '
+            set -e
+            # Debian 11 reached the end of LTS on 2026-08-31. Its live mirrors
+            # can no longer provide a coherent, durable package set, so EOL
+            # platforms opt into an immutable Debian snapshot through
+            # package-platforms.json, matching build-deb.sh.
+            if [ -n "${APT_SNAPSHOT:-}" ]; then
+              if [[ ! "$APT_SNAPSHOT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
+                echo "ERROR: invalid Debian snapshot timestamp: $APT_SNAPSHOT"
+                exit 1
+              fi
+              {
+                echo "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT}/ ${PLATFORM_CODENAME} main"
+                echo "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/${APT_SNAPSHOT}/ ${PLATFORM_CODENAME}-updates main"
+                echo "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/${APT_SNAPSHOT}/ ${PLATFORM_CODENAME}-security main"
+              } > /etc/apt/sources.list
+              rm -f /etc/apt/sources.list.d/*
+            fi
+            # set -e makes an apt failure fail this step immediately instead of
+            # committing a systemd-less image that only breaks at /sbin/init.
             apt-get update && apt-get install -y systemd systemd-sysv procps iproute2
             # Mask units that interfere with container operation
             mkdir -p /etc/systemd/system
