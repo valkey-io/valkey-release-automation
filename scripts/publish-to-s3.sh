@@ -111,7 +111,10 @@ for dir in "${ARTIFACTS_DIR}"/valkey-debs-*/; do
   done
 
   cd "$dest"
-  dpkg-scanpackages --arch "$arch" . > Packages
+  # dpkg-scanpackages writes Filename relative to the directory it scans, but
+  # apt resolves Filename against the sources.list URI -- the platform
+  # directory, one level up. Scan from there so the paths line up.
+  ( cd .. && dpkg-scanpackages --arch "$arch" "$arch" ) > Packages
   gzip -9 -k -f Packages
 
   generate_release "$(pwd)" "$arch" > Release
