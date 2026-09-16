@@ -97,9 +97,27 @@ jobs:
           }
           URL="https://github.com/valkey-io/valkey/archive/refs/tags/${VERSION}.tar.gz"
           FILENAME="valkey-${VERSION}.tar.gz"
-          
+
           wget -O "$FILENAME" "$URL" || { echo "Failed to download $URL"; exit 1; }
-          
+
+          # The tag URL is mutable, so re-verify the tag AFTER the bytes are
+          # fetched: a tag moved between check and download would otherwise
+          # publish a hash for content from a different commit. Two identical
+          # reads bracketing the download prove the downloaded archive was
+          # generated from the verified commit.
+          REF=$(gh api "repos/${{ github.repository_owner }}/valkey/git/ref/tags/${VERSION}")
+          TYPE=$(jq -r '.object.type' <<< "$REF")
+          SHA=$(jq -r '.object.sha' <<< "$REF")
+          if [[ "$TYPE" == "tag" ]]; then
+            TAG=$(gh api "repos/${{ github.repository_owner }}/valkey/git/tags/${SHA}")
+            TYPE=$(jq -r '.object.type' <<< "$TAG")
+            SHA=$(jq -r '.object.sha' <<< "$TAG")
+          fi
+          [[ "$TYPE" == "commit" && "$SHA" == "$SOURCE_SHA" ]] || {
+            echo "Release tag moved during hash download: found $TYPE $SHA, expected $SOURCE_SHA" >&2
+            exit 1
+          }
+
           HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
           
           if ! grep -q "$HASH $URL" README; then

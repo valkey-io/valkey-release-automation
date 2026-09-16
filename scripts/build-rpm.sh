@@ -181,7 +181,13 @@ cd $BUILD_ROOT/SOURCES
 # commit: when the caller mounts a source tarball (VALKEY_SOURCE_TARBALL),
 # use it instead of downloading a tag/branch archive, so the build cannot
 # drift from the requested SHA.
-if [ -n "${VALKEY_SOURCE_TARBALL:-}" ] && [ -f "${VALKEY_SOURCE_TARBALL}" ]; then
+if [ -n "${VALKEY_SOURCE_TARBALL:-}" ]; then
+  # Fail closed: the caller asked for an exact source. Falling through to a
+  # tag download would silently violate the SHA pin.
+  if [ ! -f "${VALKEY_SOURCE_TARBALL}" ]; then
+    echo "ERROR: VALKEY_SOURCE_TARBALL is set but ${VALKEY_SOURCE_TARBALL} does not exist" >&2
+    exit 1
+  fi
   echo "Using mounted source tarball ${VALKEY_SOURCE_TARBALL}"
   cp "${VALKEY_SOURCE_TARBALL}" "valkey-${VALKEY_VERSION}.tar.gz"
 fi

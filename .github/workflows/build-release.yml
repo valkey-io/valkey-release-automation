@@ -319,7 +319,11 @@ jobs:
       build_matrix: ${{ needs.generate-build-matrix.outputs.x86_64-build-matrix }}
       region: us-west-2
     secrets:
-      bucket_name: ${{ needs.process-inputs.outputs.environment == 'dev' && secrets.AWS_TEST_BUCKET || secrets.AWS_S3_BUCKET }}
+      # Fail safe: || falls through on an EMPTY left operand, so the
+      # production bucket must be the guarded branch. A dev run with an
+      # unset AWS_TEST_BUCKET then yields an empty bucket_name, which the
+      # called workflow rejects, instead of silently writing production.
+      bucket_name: ${{ needs.process-inputs.outputs.environment == 'prod' && secrets.AWS_S3_BUCKET || secrets.AWS_TEST_BUCKET }}
       role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
   release-build-linux-arm-packages:
@@ -349,7 +353,11 @@ jobs:
       build_matrix: ${{ needs.generate-build-matrix.outputs.arm64-build-matrix }}
       region: us-west-2
     secrets:
-      bucket_name: ${{ needs.process-inputs.outputs.environment == 'dev' && secrets.AWS_TEST_BUCKET || secrets.AWS_S3_BUCKET }}
+      # Fail safe: || falls through on an EMPTY left operand, so the
+      # production bucket must be the guarded branch. A dev run with an
+      # unset AWS_TEST_BUCKET then yields an empty bucket_name, which the
+      # called workflow rejects, instead of silently writing production.
+      bucket_name: ${{ needs.process-inputs.outputs.environment == 'prod' && secrets.AWS_S3_BUCKET || secrets.AWS_TEST_BUCKET }}
       role_to_assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
 
   release-build-packages:

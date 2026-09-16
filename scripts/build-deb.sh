@@ -126,7 +126,13 @@ echo "✓ Found packaging files at: $PACKAGING_DIR"
 cd /root
 # SHA-pinned builds: use the mounted exact-commit source tarball when
 # provided (see build-rpm.sh for rationale).
-if [ -n "${VALKEY_SOURCE_TARBALL:-}" ] && [ -f "${VALKEY_SOURCE_TARBALL}" ]; then
+if [ -n "${VALKEY_SOURCE_TARBALL:-}" ]; then
+  # Fail closed: the caller asked for an exact source. Falling through to a
+  # tag download would silently violate the SHA pin.
+  if [ ! -f "${VALKEY_SOURCE_TARBALL}" ]; then
+    echo "ERROR: VALKEY_SOURCE_TARBALL is set but ${VALKEY_SOURCE_TARBALL} does not exist" >&2
+    exit 1
+  fi
   echo "Using mounted source tarball ${VALKEY_SOURCE_TARBALL}"
   cp "${VALKEY_SOURCE_TARBALL}" "valkey_${VALKEY_VERSION}.orig.tar.gz"
 fi

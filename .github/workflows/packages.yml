@@ -537,6 +537,9 @@ jobs:
               'zypper -n install -y systemd systemd-sysvinit procps iproute2 2>/dev/null'
           else
             docker exec "${CONTAINER_NAME}-setup" bash -c '
+              # errexit: a failed systemd install must fail this step instead
+              # of committing an image that only breaks later at /sbin/init.
+              set -e
               if command -v dnf5 &>/dev/null; then
                 dnf5 install -y systemd procps-ng iproute
               elif command -v dnf &>/dev/null; then
@@ -653,6 +656,10 @@ jobs:
           PLATFORM_ID: ${{ matrix.platform.id }}
           PLATFORM_NAME: ${{ matrix.platform.name }}
           CONTAINER_IMAGE: ${{ matrix.platform.container }}
+          # Matrix values enter the shell through env, never interpolated
+          # into shell source, so metacharacters are data rather than code.
+          APT_SNAPSHOT: ${{ matrix.platform.apt_snapshot || '' }}
+          PLATFORM_CODENAME: ${{ matrix.platform.codename }}
         run: |
           DOCKER_PLATFORM="linux/${ARCH}"
           CONTAINER_NAME="test-deb-${PLATFORM_ID}-${ARCH}"
@@ -668,8 +675,8 @@ jobs:
 
           echo "Installing systemd prerequisites..."
           docker exec \
-            -e APT_SNAPSHOT="${{ matrix.platform.apt_snapshot || '' }}" \
-            -e PLATFORM_CODENAME="${{ matrix.platform.codename }}" \
+            -e APT_SNAPSHOT="$APT_SNAPSHOT" \
+            -e PLATFORM_CODENAME="$PLATFORM_CODENAME" \
             "${CONTAINER_NAME}-setup" bash -c '
             set -e
             # Debian 11 reached the end of LTS on 2026-08-31. Its live mirrors
@@ -688,9 +695,11 @@ jobs:
               } > /etc/apt/sources.list
               rm -f /etc/apt/sources.list.d/*
             fi
-            # set -e makes an apt failure fail this step immediately instead of
-            # committing a systemd-less image that only breaks at /sbin/init.
-            apt-get update && apt-get install -y systemd systemd-sysv procps iproute2
+            # Separate commands, not an && list: set -e does not fire when the
+            # left operand of && fails, which would skip the install, continue,
+            # and commit a systemd-less image that only breaks at /sbin/init.
+            apt-get update
+            apt-get install -y systemd systemd-sysv procps iproute2
             # Mask units that interfere with container operation
             mkdir -p /etc/systemd/system
             ln -sf /dev/null /etc/systemd/system/apt-daily.timer 2>/dev/null || true

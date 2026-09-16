@@ -179,14 +179,18 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             "APT_SNAPSHOT: ${{ matrix.platform.apt_snapshot || '' }}", workflow_text
         )
         self.assertIn('-e APT_SNAPSHOT="$APT_SNAPSHOT"', workflow_text)
-        self.assertIn(
-            '-e APT_SNAPSHOT="${{ matrix.platform.apt_snapshot || \'\' }}"',
-            workflow_text,
-        )
+        # Matrix values reach the shell through step env, never interpolated
+        # into shell source.
+        self.assertNotIn('-e APT_SNAPSHOT="${{', workflow_text)
         self.assertIn(
             "snapshot.debian.org/archive/debian/${APT_SNAPSHOT}", workflow_text
         )
-        self.assertIn("committing a systemd-less image", workflow_text)
+        # apt-get update and install must be separate commands: set -e does
+        # not fire when the left operand of && fails, which would commit a
+        # systemd-less image that only breaks at /sbin/init.
+        self.assertNotIn("apt-get update && apt-get install", workflow_text)
+        self.assertIn("apt-get update\n", workflow_text)
+        self.assertIn("apt-get install -y systemd systemd-sysv", workflow_text)
 
         script = Path("scripts/build-deb.sh").read_text(encoding="utf-8")
         self.assertIn("snapshot.debian.org/archive/debian/${APT_SNAPSHOT}", script)
