@@ -42,12 +42,7 @@ def update_website_release(version: str, template_file: str, bashbrew_json: str,
         tags = get_tags_from_bashbrew(bashbrew_json, version)
         tags_section = "\n".join(f"                - \"{tag}\"" for tag in tags)
 
-        is_rc = "-rc" in version
-        if is_rc:
-            file_path = f"{output_path}/v{version.replace('.', '-')}.md"
-        else:
-            version_dashed = version.replace(".", "-")
-            file_path = f"{output_path}/v{version_dashed}.md"
+        file_path = f"{output_path}/v{version.replace('.', '-')}.md"
 
         content = template.format(
             version=version,

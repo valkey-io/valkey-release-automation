@@ -1,0 +1,161 @@
+# Architecture is carried entirely by build_matrix (runs-on comes from
+# matrix.distro.target), so one workflow serves both x86 and ARM callers.
+name: Build Linux Archives
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version of Valkey to create.
+        type: string
+        required: true
+      build_matrix:
+        description: The build targets to produce as a JSON matrix.
+        type: string
+        required: true
+      region:
+        description: >-
+          The AWS region to upload the packages to. Consumed only by the
+          publish steps: required (non-empty) when publish is true, unused
+          and may be omitted when publish is false (qualification).
+        type: string
+        required: false
+        default: ''
+      source_sha:
+        description: Exact valkey commit to build from; empty builds inputs.version.
+        type: string
+        required: false
+        default: ''
+      publish:
+        description: Upload the tarballs to S3 (false = qualification, artifacts only).
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      bucket_name:
+        description: The name of the S3 bucket to upload the packages to.
+        required: false
+      role_to_assume:
+        description: The role to assume for the S3 bucket.
+        required: false
+
+# Builds and uploads deliberately run in different jobs. Candidate source is
+# compiled only in build-valkey, which cannot mint an OIDC token. The upload
+# job receives a data artifact and never executes candidate code.
+
+jobs:
+  build-valkey:
+    name: Build package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    runs-on: ${{ matrix.distro.target }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.build_matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository_owner }}/valkey
+          ref: ${{ inputs.source_sha != '' && inputs.source_sha || inputs.version }}
+          persist-credentials: false
+
+      - name: Verify checkout matches the requested commit
+        if: inputs.source_sha != ''
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [[ "$HEAD_SHA" != "$SOURCE_SHA" ]]; then
+            echo "Checkout is at $HEAD_SHA, not the requested $SOURCE_SHA"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
+
+      - name: Make Valkey
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          echo "Building for version: $VERSION"
+
+          if [[ "$VERSION" != "unstable" ]]; then
+            MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+            if [[ $(echo "$MAJOR_MINOR < 8.1" | bc -l) -eq 1 ]]; then
+              echo "Version $MAJOR_MINOR is less than 8.1 - no USE_FAST_FLOAT"
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
+            else
+              echo "Version $MAJOR_MINOR is 8.1 or higher - enabling USE_FAST_FLOAT"
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+            fi
+          else
+            echo "Unstable version detected - enabling USE_FAST_FLOAT"
+            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+          fi
+
+      - name: Create Tarball and SHA256sums
+        env:
+          VERSION: ${{ inputs.version }}
+          PLATFORM: ${{ matrix.distro.platform }}
+          ARCH: ${{ matrix.distro.arch }}
+        run: |
+          set -euo pipefail
+          TAR_FILE_NAME="valkey-${VERSION}-${PLATFORM}-${ARCH}"
+          mkdir -p "$TAR_FILE_NAME/bin" "$TAR_FILE_NAME/share"
+          rsync -av --exclude='*.c' --exclude='*.d' --exclude='*.o' src/valkey-* "$TAR_FILE_NAME/bin/"
+          cp -v COPYING "$TAR_FILE_NAME/share/LICENSE"
+          tar -czvf "$TAR_FILE_NAME.tar.gz" "$TAR_FILE_NAME"
+          sha256sum "$TAR_FILE_NAME.tar.gz" > "$TAR_FILE_NAME.tar.gz.sha256"
+          mkdir -p packages-files
+          cp -rfv "$TAR_FILE_NAME".tar* packages-files/
+
+      - name: Upload archive artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-${{ inputs.version }}-${{ matrix.distro.platform }}-${{ matrix.distro.arch }}
+          path: packages-files/
+          retention-days: ${{ inputs.publish && 1 || 30 }}
+
+  publish-valkey:
+    name: Publish package ${{ matrix.distro.target }} ${{ matrix.distro.arch }}
+    if: inputs.publish
+    needs: build-valkey
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.build_matrix) }}
+    steps:
+      - name: Validate publishing configuration
+        env:
+          REGION: ${{ inputs.region }}
+          BUCKET_NAME: ${{ secrets.bucket_name }}
+          ROLE_TO_ASSUME: ${{ secrets.role_to_assume }}
+        run: |
+          set -euo pipefail
+          [[ -n "$REGION" ]] || { echo "inputs.region is required"; exit 1; }
+          [[ -n "$BUCKET_NAME" ]] || { echo "bucket_name is required"; exit 1; }
+          [[ -n "$ROLE_TO_ASSUME" ]] || { echo "role_to_assume is required"; exit 1; }
+
+      - name: Download archive artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: archive-${{ inputs.version }}-${{ matrix.distro.platform }}-${{ matrix.distro.arch }}
+          path: packages-files
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          aws-region: ${{ inputs.region }}
+          role-to-assume: ${{ secrets.role_to_assume }}
+
+      - name: Sync to S3
+        env:
+          BUCKET_NAME: ${{ secrets.bucket_name }}
+        run: aws s3 sync packages-files "s3://${BUCKET_NAME}/releases/"

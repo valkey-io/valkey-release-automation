@@ -102,10 +102,6 @@ elif [ "$TYPE" = "rpm" ]; then
     BUNDLED_DEP_DIR="hiredis"
   fi
 
-  # Determine the spec version (use the version from the existing spec, not the input version,
-  # since build-rpm.sh overrides Version: separately)
-  SPEC_VERSION="${VERSION}"
-
   # Load changelog (override dir wins if it ships its own fragment)
   CHANGELOG_FILE="$(resolve_template "changelog-${MAJOR_VERSION}.${MINOR}")"
   if [ -f "$CHANGELOG_FILE" ]; then
@@ -131,7 +127,7 @@ elif [ "$TYPE" = "rpm" ]; then
     sed \
       -e "s/@@MAJOR_VERSION@@/${MAJOR_VERSION}/g" \
       -e "s/@@MINOR@@/${MINOR}/g" \
-      -e "s/@@SPEC_VERSION@@/${SPEC_VERSION}/g" \
+      -e "s/@@SPEC_VERSION@@/${VERSION}/g" \
       -e "s/@@BUNDLED_DEP_NAME@@/${BUNDLED_DEP_NAME}/g" \
       -e "s|@@BUNDLED_DEP_PROVIDES@@|${BUNDLED_DEP_PROVIDES}|g" \
       -e "s/@@BUNDLED_DEP_DIR@@/${BUNDLED_DEP_DIR}/g" \

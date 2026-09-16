@@ -1,5 +1,5 @@
 # Overview
-This repository automates all the post-release processes for a new Valkey version release. The tasks undertaken by the this bot include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, opening a PR on the valkey-container, updating the valkey-doc repository, and updating the valkey.io website with a download page for the new version. For major/minor releases, a documentation PR is opened on valkey-doc. For patch releases, a lightweight git tag is created in valkey-doc pointing at the previous patch version's tag (docs are not versioned per patch, but tags are needed for reproducible builds).
+This repository automates all the post-release processes for a new Valkey version release. The tasks undertaken by this bot include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, opening PRs on valkey-container and valkey-helm, updating the valkey-doc repository, updating valkey.io with a download page, and triggering compatible Valkey Bundle updates. For major/minor releases, a documentation PR is opened on valkey-doc. For patch releases, a lightweight git tag is created in valkey-doc pointing at the previous patch version's tag (docs are not versioned per patch, but tags are needed for reproducible builds). Helm updates are opened as drafts until the matching public container image exists.
 
 Here is a diagram that depicts the automated release process: <br>
 ![alt text](documents/Diagram.png)
@@ -57,8 +57,7 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
                 "Condition": {
                     "StringLike": {
                         "token.actions.githubusercontent.com:sub": [
-                            "repo:valkey-io/valkey:ref:refs/heads/unstable",
-                            "repo:valkey-io/valkey:ref:refs/tags/*"
+                            "repo:<owner>/valkey-release-automation:ref:refs/heads/main"
                         ],
                         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
                     }
@@ -68,5 +67,18 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
     }
     ```
 **Note:** Remember to replace `<aws_account_id>` with your actual aws account id.
+
+**Warning:** Keep the OIDC subject restricted to this repository's exact default branch. Production callers are refused from other refs.
 ### c. Create a secret named `AWS_ROLE_TO_ASSUME`
 - The secret value for this token is the arn of the IAM role that you just created.
+
+## 4. Provision the release-publish Protected Environment
+Production writes in this repository are gated behind a GitHub protected environment named `release-publish`. Without it, the gate jobs approve automatically and provide no protection.
+- Go to the repository Settings, then Environments, and create an environment named exactly `release-publish`.
+- Enable **Required reviewers** and add at least one release maintainer (up to six reviewers are allowed).
+- Enable **Prevent self-review** so the person dispatching a production run cannot approve their own deployment.
+- This environment gates the `prod-approval` job on **every** production invocation of `build-release.yml` (including `repository_dispatch`) and the standalone publish gates in `update-try-valkey.yml` and `packages.yml`. Called subworkflows consume the already-approved release path and do not ask again.
+- Prevent admin bypass and restrict deployment branches to the exact default branch. A contents-write token can create `repository_dispatch` events, so their payload is never treated as production authorization.
+- Every production build resolves the published Valkey tag to a full
+  lowercase 40-character commit SHA. An explicitly supplied `source_sha` must
+  match that tag; the normal Valkey release event may omit it.

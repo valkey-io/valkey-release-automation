@@ -37,11 +37,11 @@ valkey-release-automation/
 │   └── workflows/
 │       ├── build-release.yml                # Master release orchestrator
 │       ├── packages.yml                     # RPM + DEB package builder
-│       ├── call-build-linux-x86-packages.yml
-│       ├── call-build-linux-arm-packages.yml
+│       ├── call-build-linux-archives.yml
 │       ├── update-valkey-hashes.yml
 │       ├── update-valkey-container.yml
 │       ├── update-valkey-doc.yml
+│       ├── update-valkey-helm.yml
 │       ├── update-valkey-website.yml
 │       └── update-try-valkey.yml
 ├── scripts/
@@ -58,6 +58,7 @@ valkey-release-automation/
 │   ├── automate_alias_update.py             # Update valkey-hashes aliases
 │   ├── automate_website_description.py      # Update website descriptions
 │   ├── extract_hashes_info.py               # Extract hash info for releases
+│   ├── update_helm_chart.py                  # Deterministic Helm metadata bump
 │   └── pages/
 │       └── index.html                       # GH Pages template with install instructions
 └── packaging/
@@ -115,19 +116,20 @@ valkey-release-automation/
     │  (Master Orchestrator)    │          │  (RPM + DEB Packages)     │
     └────────────┬─────────────┘          └────────────┬─────────────┘
                  │                                      │
-      ┌──────────┼──────────┐               ┌──────────┴────────┐
-      │          │          │               │                   │
-      ▼          ▼          ▼               ▼                   ▼
-  ┌────────┐ ┌────────┐ ┌───────────┐  ┌───────────┐     ┌──────────┐
-  │Tarball │ │Post-   │ │ trigger   │  │ RPM Builds│     │DEB Builds│
-  │Builds  │ │Release │ │ bundle    │  │ (15 plat× │     │(5 plat×  │
-  │(x86+   │ │(prod)  │ │(>= 8.1.0)│  │  2 arch)  │     │ 2 arch)  │
-  │ ARM)   │ │        │ │           │  └─────┬─────┘     └────┬─────┘
-  └────────┘ │- hashes│ └───────────┘        │                │
+      ┌──────────┤                          ┌──────────┴────────┐
+      │          │                          │                   │
+      ▼          ▼                          ▼                   ▼
+  ┌────────┐ ┌────────┐                ┌───────────┐     ┌──────────┐
+  │Tarball │ │Post-   │                │ RPM Builds│     │DEB Builds│
+  │Builds  │ │Release │                │ (15 plat× │     │(5 plat×  │
+  │(x86+   │ │(prod)  │                │  2 arch)  │     │ 2 arch)  │
+  │ ARM)   │ │        │                └─────┬─────┘     └────┬─────┘
+  └────────┘ │- hashes│                      │                │
              │- docs  │                      ▼                ▼
              │- site  │                ┌──────────┐     ┌──────────┐
              │- cont. │                │ Test RPM │     │ Test DEB │
-             └────────┘                └──────────┘     └──────────┘
+             │- helm  │                └──────────┘     └──────────┘
+             └────────┘
                                              │                │
                                              ▼                ▼
                                        ┌──────────────────────────┐
@@ -162,21 +164,54 @@ The master workflow that orchestrates the entire release process.
 ### Execution Flow (prod)
 
 ```
-process-inputs ──► validate version, detect bundle eligibility (>= 8.1.0)
+process-inputs ──► validate version and environment
        │
        ├──► update-valkey-hashes ──► commit source SHA256 to valkey-hashes repo
        │           │
        │           ├──► update-valkey-container ──► update Docker definitions
        │           │           │
-       │           │           └──► update-valkey-website ◄── update-try-valkey
+       │           │           ├──► update-valkey-website ◄── update-try-valkey
+       │           │           └──► update-valkey-helm (GA draft PR)
        │           │
        │           └──► update-valkey-doc (only for X.Y.0 releases)
        │
-       ├──► generate-build-matrix ──► release-build-linux-x86-packages  (tarballs → S3)
-       │                          └──► release-build-linux-arm-packages  (tarballs → S3)
-       │
-       └──► trigger-valkey-bundle (>= 8.1.0 only)
+       └──► generate-build-matrix ──► release-build-linux-x86-packages  (tarballs → S3)
+                                  └──► release-build-linux-arm-packages  (tarballs → S3)
 ```
+
+Production begins only after the `release-publish` environment is approved.
+The workflow resolves the published Valkey tag to a commit and builds that exact
+SHA; if a dispatch supplies `source_sha`, it must match the tag. After the
+container update is opened, the workflow waits for the exact Alpine and Trixie
+images to become public before compatible versions trigger Valkey Bundle's
+existing `valkey-release` update hook. GA releases also open a draft Helm chart
+bump. The draft is made ready only after the matching public container image is
+available, preserving the image-before-chart ordering without a background
+controller.
+
+### Qualification
+
+`qualify-release.yml` accepts a release tag, exact source SHA, and optional
+request id. It builds the archive matrix and, for GA releases, every RPM/DEB
+package without receiving AWS or publishing credentials. Candidate execution
+runs in explicitly read-only jobs with checkout credentials disabled; separate
+publisher jobs alone can mint OIDC tokens. The expected 2 x86, 2 ARM, 30 RPM,
+and 10 DEB breadth is enforced exactly (RPM/DEB are intentionally skipped for
+RCs). Skipped GA package builds fail the summary job.
+
+`valkey-ci-agent` dispatches qualification from its publication workflow and
+waits synchronously for the exact request id. Every implementation checkout is
+pinned to the reusable workflow's immutable `github.workflow_sha`, which is
+returned to the approval plan. The workflow conclusion is the gate; there is
+no manifest artifact, nonce receipt, or controller-side parser.
+
+### Production dispatch payload
+
+The `build-release` repository dispatch accepts `version`, `environment`,
+and an optional `source_sha`. For production, the workflow always resolves
+`version` as a tag in `valkey-io/valkey`; an omitted SHA is filled from that
+tag and a supplied SHA must match it. This keeps the existing Valkey release
+trigger compatible without a separate Valkey workflow change.
 
 ### packages.yml (RPM + DEB Builds)
 
@@ -187,7 +222,7 @@ process-inputs ──► validate version, detect bundle eligibility (>= 8.1.0)
 ```
 packages.yml
        │
-       ├──► process-inputs ──► derive packaging_dir (e.g., 9.0)
+       ├──► process-inputs ──► validate version, generate matrices
        │
        ├──► build-rpm (15 platforms × 2 arches)
        │       ├── merge common/ + N.M/ packaging
@@ -224,7 +259,7 @@ The primary workflow for building distribution packages. Accepts a single `versi
 
 ### Process Inputs Job
 
-Derives the packaging directory from the version's **major.minor** number. Each major.minor version has its own packaging directory:
+Validates the version input and generates the platform matrices. Each build job then derives its packaging directory from the version's **major.minor** number:
 
 ```
 Input version    Packaging dir     Doc version    Notes
@@ -240,11 +275,9 @@ Each major.minor version has its own packaging directory and S3 repository. For 
 
 > (*) **New versions require setup:** create `packaging/N.M/` with version-specific files and `packaging/templates/rpm/changelog-N.M`. See [Adding a new version](#template-system-8190) for details.
 
-```yaml
-MAJOR="${VERSION%%.*}"
-MINOR_PART="${VERSION#*.}"
-MINOR="${MINOR_PART%%.*}"
-packaging_dir="${MAJOR}.${MINOR}"
+```bash
+PACKAGING_DIR="${VALKEY_VERSION%%-*}"   # strip any -rcN suffix
+PACKAGING_DIR="${PACKAGING_DIR%.*}"     # strip patch → MAJOR.MINOR
 ```
 
 ### Build Pipeline Diagram
@@ -255,7 +288,7 @@ packaging_dir="${MAJOR}.${MINOR}"
 ├───────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌──────────────┐                                                 │
-│  │process-inputs│  version=9.0.3 → packaging_dir=9.0             │
+│  │process-inputs│  validate version, generate matrices            │
 │  └──────┬───────┘                                                 │
 │         │                                                         │
 │    ┌────┴────┐                                                    │
@@ -671,13 +704,7 @@ DOC_VERSION=$(echo "${VERSION}" | sed "s/\.[0-9]*$/.0/")
 
 ### Packaging Directory Selection
 
-```
-version=10.0.1 →  MAJOR=10, MINOR=0  →  packaging/10.0/  (requires setup — see below)
-version=9.1.0  →  MAJOR=9,  MINOR=1  →  packaging/9.1/   (requires setup — see below)
-version=9.0.3  →  MAJOR=9,  MINOR=0  →  packaging/9.0/
-version=8.1.6  →  MAJOR=8,  MINOR=1  →  packaging/8.1/
-version=7.2.12 →  MAJOR=7,  MINOR=2  →  packaging/7.2/
-```
+The mapping from version to `packaging/N.M/` is shown in the table under [Process Inputs Job](#process-inputs-job). New major.minor lines require setup; see [Template System](#template-system-8190).
 
 ### Template System (8.1/9.0+)
 
@@ -1034,14 +1061,16 @@ gpg --armor --export packages@valkey.io > GPG-KEY-valkey.asc
 
 ### Step 5: Trigger a Build
 
-Run the workflow manually to verify the full pipeline:
+Run the workflow manually to verify the full pipeline. `packages.yml` accepts `version`, `publish`, and an optional `source_sha`; there is no `environment` input:
 
 ```bash
 gh workflow run packages.yml \
   --repo owner/repo \
   -f version=9.0.4 \
-  -f environment=prod
+  -f publish=true
 ```
+
+Optionally add `-f source_sha=<full 40-character valkey commit SHA>` to build from an exact commit instead of the tag archive. With `publish=true`, a standalone run pauses once at `release-publish` before its publish jobs proceed (see the provisioning section in README.md). `publish` defaults to `false`, which gives a build-and-test-only run with no production write.
 
 ### Step 6: Verify Output
 
@@ -1117,20 +1146,7 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 | `packaging/templates/rpm/` | `/packaging-templates:ro` | Templates (8.1/9.0+) |
 | `output/` | `/output` | Built RPMs written here |
 
-**Execution flow:**
-
-```
-1. Install build tools (rpm-build, gcc, make, jemalloc-devel, openssl-devel, etc.)
-   └── SUSE: zypper    RHEL/Fedora: dnf/yum
-2. Merge packaging layers: common/ → override/ → templates
-3. Generate spec from template (8.1/9.0+, via generate-from-templates.sh)
-4. Copy spec + source files to ~/rpmbuild/{SPECS,SOURCES}/
-5. Override Version: and %global doc_version via sed
-6. Download valkey-${VERSION}.tar.gz and valkey-doc-${DOC_VERSION}.tar.gz
-7. rpmbuild -ba valkey.spec [--without docs if pandoc unavailable]
-8. Copy RPMs to /output/
-9. Sanity checks: rpm query, required binaries, architecture, size > 500KB
-```
+**Execution flow:** see the step-by-step diagram in [RPM Build Process](#rpm-build-process): this script performs steps 2-9 (everything after the container launch) and finishes by copying the RPMs to `/output/`.
 
 ---
 
@@ -1159,23 +1175,7 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 | `packaging/templates/debian/` | `/packaging-templates:ro` | Templates (8.1/9.0+) |
 | `output/` | `/output` | Built DEBs written here |
 
-**Execution flow:**
-
-```
-1. Install build tools (build-essential, debhelper, devscripts, libssl-dev, etc.)
-2. Merge packaging layers: common/ → override/ → templates
-3. Generate control/rules from template (8.1/9.0+, via generate-from-templates.sh)
-4. Download and extract valkey source tarball
-5. Copy debian/ directory into source tree
-6. Override VALKEY_DOC_VERSION via sed
-7. Fix debhelper compat conflicts (remove debian/compat if debhelper-compat used)
-8. Fix jemalloc on Ubuntu 22.04 (Jammy) if headers missing
-9. Install build-deps with mk-build-deps
-10. Update changelog: dch -v "${VERSION}-1.${CODENAME}" -D ${CODENAME}
-11. dpkg-buildpackage -b -us -uc -a${ARCH}
-12. Copy .deb, .ddeb, .buildinfo, .changes to /output/
-13. Sanity checks: package discovery, architecture match
-```
+**Execution flow:** see the step-by-step diagram in [DEB Build Process](#deb-build-process): this script performs steps 2-9 (everything after the container launch) and finishes by copying the `.deb`, `.ddeb`, `.buildinfo`, and `.changes` files to `/output/`. In addition to those steps it installs the build tools, fixes debhelper compat conflicts (removes `debian/compat` when `debhelper-compat` is used), and disables `USE_SYSTEM_JEMALLOC` on Ubuntu 22.04 (Jammy) when jemalloc headers are missing.
 
 ---
 
@@ -1474,4 +1474,3 @@ Step 5: Configure GitHub Pages
 | `extract_hashes_info.py` | Extracts SHA256 hash information for release artifacts |
 
 ---
-

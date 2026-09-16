@@ -23,6 +23,8 @@ FAILED_TESTS=()
 SKIPPED_TESTS=()
 INSTALLED_PKGS=()
 PKG_PREFIX=""  # "valkey" or "percona-valkey", auto-detected
+VALKEY_BINS=(valkey-server valkey-cli valkey-benchmark valkey-check-aof valkey-check-rdb valkey-sentinel)
+REDIS_BINS=(redis-server redis-cli redis-benchmark redis-check-aof redis-check-rdb redis-sentinel)
 
 if [[ -t 1 ]]; then
     RED='\033[0;31m'
@@ -164,18 +166,6 @@ assert_command_succeeds() {
     fi
 }
 
-assert_command_output_contains() {
-    local label="$1" expected="$2"
-    shift 2
-    local output
-    output="$("$@" 2>&1)" || true
-    if [[ "$output" == *"$expected"* ]]; then
-        pass "$label"
-    else
-        fail "$label (expected output containing '$expected', got: '$output')"
-    fi
-}
-
 assert_systemd_property() {
     local service="$1" property="$2" expected="$3" label="${4:-}"
     [[ -z "$label" ]] && label="$service $property=$expected"
@@ -207,6 +197,23 @@ wait_for_service() {
         elapsed=$((elapsed + 1))
     done
     return 1
+}
+
+# Records a SKIP and returns 1 when systemd is unavailable.
+require_systemd() {
+    if has_systemd; then
+        return 0
+    fi
+    skip "systemd not available - skipping $1"
+    return 1
+}
+
+server_service_name() {
+    if [[ "$OS_FAMILY" == "deb" ]]; then echo "valkey-server"; else echo "valkey@default"; fi
+}
+
+sentinel_service_name() {
+    if [[ "$OS_FAMILY" == "deb" ]]; then echo "valkey-sentinel"; else echo "valkey-sentinel@default"; fi
 }
 
 ###############################################################################
@@ -368,8 +375,7 @@ remove_packages_rpm() {
 ###############################################################################
 test_binaries() {
     section_header "Test: Binaries"
-    local bins=(valkey-server valkey-cli valkey-benchmark valkey-check-aof valkey-check-rdb valkey-sentinel)
-    for bin in "${bins[@]}"; do
+    for bin in "${VALKEY_BINS[@]}"; do
         assert_executable "/usr/bin/$bin" "$bin"
     done
     assert_command_succeeds "valkey-server --version" valkey-server --version
@@ -479,10 +485,7 @@ test_config_files() {
 test_systemd_unit_files() {
     section_header "Test: Systemd Unit Files"
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping unit file tests"
-        return
-    fi
+    require_systemd "unit file tests" || return 0
 
     if [[ "$OS_FAMILY" == "deb" ]]; then
         assert_file_exists /lib/systemd/system/valkey-server.service "valkey-server.service"
@@ -508,17 +511,10 @@ test_systemd_unit_files() {
 test_systemd_service_hardening() {
     section_header "Test: Systemd Service Hardening"
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping service hardening tests"
-        return
-    fi
+    require_systemd "service hardening tests" || return 0
 
     local server_service
-    if [[ "$OS_FAMILY" == "deb" ]]; then
-        server_service="valkey-server"
-    else
-        server_service="valkey@default"
-    fi
+    server_service="$(server_service_name)"
 
     # Detect systemd version for feature-gating
     local sd_ver
@@ -591,19 +587,11 @@ test_systemd_service_hardening() {
 test_systemd_enable_disable() {
     section_header "Test: Systemd Enable/Disable"
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping enable/disable tests"
-        return
-    fi
+    require_systemd "enable/disable tests" || return 0
 
     local server_service sentinel_service
-    if [[ "$OS_FAMILY" == "deb" ]]; then
-        server_service="valkey-server"
-        sentinel_service="valkey-sentinel"
-    else
-        server_service="valkey@default"
-        sentinel_service="valkey-sentinel@default"
-    fi
+    server_service="$(server_service_name)"
+    sentinel_service="$(sentinel_service_name)"
 
     for svc in "$server_service" "$sentinel_service"; do
         # Enable
@@ -640,19 +628,11 @@ test_systemd_enable_disable() {
 test_systemd_start_stop_restart() {
     section_header "Test: Systemd Start/Stop/Restart"
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping start/stop/restart tests"
-        return
-    fi
+    require_systemd "start/stop/restart tests" || return 0
 
     local server_service sentinel_service
-    if [[ "$OS_FAMILY" == "deb" ]]; then
-        server_service="valkey-server"
-        sentinel_service="valkey-sentinel"
-    else
-        server_service="valkey@default"
-        sentinel_service="valkey-sentinel@default"
-    fi
+    server_service="$(server_service_name)"
+    sentinel_service="$(sentinel_service_name)"
 
     for svc in "$server_service" "$sentinel_service"; do
         # Start
@@ -729,17 +709,13 @@ test_systemd_start_stop_restart() {
 test_systemd_runtime_environment() {
     section_header "Test: Systemd Runtime Environment"
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping runtime environment tests"
-        return
-    fi
+    require_systemd "runtime environment tests" || return 0
 
     local server_service pid_file
+    server_service="$(server_service_name)"
     if [[ "$OS_FAMILY" == "deb" ]]; then
-        server_service="valkey-server"
         pid_file="/run/valkey/valkey-server.pid"
     else
-        server_service="valkey@default"
         pid_file="/run/valkey/default.pid"
     fi
 
@@ -797,17 +773,10 @@ test_systemd_runtime_environment() {
 test_systemd_restart_on_failure() {
     section_header "Test: Systemd Restart on Failure"
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping restart-on-failure tests"
-        return
-    fi
+    require_systemd "restart-on-failure tests" || return 0
 
     local server_service
-    if [[ "$OS_FAMILY" == "deb" ]]; then
-        server_service="valkey-server"
-    else
-        server_service="valkey@default"
-    fi
+    server_service="$(server_service_name)"
 
     echo "Starting $server_service..."
     if ! systemctl start "$server_service" 2>&1; then
@@ -868,10 +837,7 @@ test_systemd_targets() {
         return
     fi
 
-    if ! has_systemd; then
-        skip "systemd not available — skipping target tests"
-        return
-    fi
+    require_systemd "target tests" || return 0
 
     local target_output
     target_output="$(systemctl list-unit-files valkey.target 2>/dev/null)" || true
@@ -940,11 +906,7 @@ test_valkey_server_service() {
     fi
 
     local service_name
-    if [[ "$OS_FAMILY" == "deb" ]]; then
-        service_name="valkey-server"
-    else
-        service_name="valkey@default"
-    fi
+    service_name="$(server_service_name)"
 
     echo "Starting $service_name..."
     if ! systemctl start "$service_name" 2>&1; then
@@ -1024,11 +986,7 @@ test_valkey_sentinel_service() {
     fi
 
     local service_name
-    if [[ "$OS_FAMILY" == "deb" ]]; then
-        service_name="valkey-sentinel"
-    else
-        service_name="valkey-sentinel@default"
-    fi
+    service_name="$(sentinel_service_name)"
 
     echo "Starting $service_name..."
     if ! systemctl start "$service_name" 2>&1; then
@@ -1069,8 +1027,7 @@ test_valkey_sentinel_service() {
 test_compat_redis() {
     section_header "Test: Redis Compatibility"
 
-    local redis_bins=(redis-server redis-cli redis-benchmark redis-check-aof redis-check-rdb redis-sentinel)
-    for bin in "${redis_bins[@]}"; do
+    for bin in "${REDIS_BINS[@]}"; do
         assert_symlink "/usr/bin/$bin" "$bin"
     done
 
@@ -1118,14 +1075,12 @@ test_clean_removal() {
     section_header "Test: Clean Removal"
 
     # Binaries should be gone
-    local bins=(valkey-server valkey-cli valkey-benchmark valkey-check-aof valkey-check-rdb valkey-sentinel)
-    for bin in "${bins[@]}"; do
+    for bin in "${VALKEY_BINS[@]}"; do
         assert_file_not_exists "/usr/bin/$bin" "$bin"
     done
 
     # Redis compat symlinks should be gone
-    local redis_bins=(redis-server redis-cli redis-benchmark redis-check-aof redis-check-rdb redis-sentinel)
-    for bin in "${redis_bins[@]}"; do
+    for bin in "${REDIS_BINS[@]}"; do
         assert_file_not_exists "/usr/bin/$bin" "$bin"
     done
 
@@ -1330,11 +1285,7 @@ main() {
 
     # Stop any lingering services before removal
     if has_systemd; then
-        if [[ "$OS_FAMILY" == "deb" ]]; then
-            systemctl stop valkey-server valkey-sentinel 2>/dev/null || true
-        else
-            systemctl stop valkey@default valkey-sentinel@default 2>/dev/null || true
-        fi
+        systemctl stop "$(server_service_name)" "$(sentinel_service_name)" 2>/dev/null || true
         sleep 1
     fi
 

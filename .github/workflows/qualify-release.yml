@@ -1,0 +1,264 @@
+# Qualify a release candidate: build everything, publish nothing.
+#
+# Runs the archive builds and (for non-rc) the RPM/DEB package matrix against
+# an EXACT valkey commit, before any GitHub Release, tag, S3 upload, or
+# downstream update exists. This is the pre-publication gate that catches a
+# 7.2.14-style failure (a package matrix that cannot build) while the release
+# is still nothing but a merged notes PR.
+#
+# No-publish is structural, not conditional: this workflow passes NO secrets
+# to the called workflows, so qualification cannot obtain AWS credentials at
+# all; the called workflows' publish steps are additionally gated off by
+# publish: false. valkey-ci-agent waits synchronously for this exact run's
+# conclusion, so there is no durable manifest or external evidence parser.
+name: Qualify Release
+
+run-name: "Qualify ${{ inputs.version }} @ ${{ inputs.source_sha }} · ${{ inputs.request_id || 'manual' }}"
+
+on:
+  workflow_call:
+    outputs:
+      automation_sha:
+        description: Immutable automation commit used by every qualification checkout.
+        value: ${{ jobs.validate-inputs.outputs.automation_sha }}
+    inputs:
+      version:
+        description: The version under qualification (e.g. 9.1.2 or 9.2.0-rc1).
+        required: true
+        type: string
+      source_sha:
+        description: The exact valkey commit (full 40-character SHA) to qualify.
+        required: true
+        type: string
+      request_id:
+        description: Correlation id supplied by the waiting publication workflow.
+        required: false
+        type: string
+        default: reusable
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version under qualification (e.g. 9.1.2 or 9.2.0-rc1).
+        required: true
+        type: string
+      source_sha:
+        description: The exact valkey commit (full 40-character SHA) to qualify.
+        required: true
+        type: string
+      request_id:
+        description: Correlation id supplied by the waiting publication workflow.
+        required: false
+        type: string
+        default: manual
+
+permissions: {}
+
+jobs:
+  validate-inputs:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      automation_sha: ${{ steps.revision.outputs.automation_sha }}
+      automation_repo: ${{ steps.revision.outputs.automation_repo }}
+    steps:
+      - name: Record immutable automation revision
+        id: revision
+        env:
+          AUTOMATION_SHA: ${{ job.workflow_sha }}
+          AUTOMATION_REPO: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          [[ "$AUTOMATION_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid job.workflow_sha" >&2; exit 1; }
+          [[ "$AUTOMATION_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "invalid job.workflow_repository" >&2; exit 1; }
+          echo "automation_sha=$AUTOMATION_SHA" >> "$GITHUB_OUTPUT"
+          echo "automation_repo=$AUTOMATION_REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version and SHA shapes
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a full lowercase 40-character SHA: $SOURCE_SHA"
+            exit 1
+          fi
+
+  generate-build-matrix:
+    name: Generate build matrix
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      x86-matrix: ${{ steps.matrix.outputs.x86_64-build-matrix }}
+      arm-matrix: ${{ steps.matrix.outputs.arm64-build-matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ needs.validate-inputs.outputs.automation_repo }}
+          ref: ${{ needs.validate-inputs.outputs.automation_sha }}
+          persist-credentials: false
+
+      - name: Generate matrix
+        id: matrix
+        uses: ./.github/actions/generate-package-build-matrix
+
+  # NOTE: no `secrets:` on any of these calls - qualification runs with zero
+  # AWS credentials in scope, in addition to publish: false.
+  qualify-linux-x86-archives:
+    name: Qualify x86 archives
+    needs: generate-build-matrix
+    # GitHub validates permission requests made by every called-workflow job,
+    # including the skipped publisher, so the call grant includes id-token.
+    # The job that actually executes candidate code explicitly downgrades
+    # itself to contents:read; only publish-valkey can receive OIDC, and that
+    # job is structurally skipped because publish=false.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/call-build-linux-archives.yml
+    with:
+      version: ${{ inputs.version }}
+      build_matrix: ${{ needs.generate-build-matrix.outputs.x86-matrix }}
+      source_sha: ${{ inputs.source_sha }}
+      publish: false
+
+  qualify-linux-arm-archives:
+    name: Qualify ARM archives
+    needs: generate-build-matrix
+    # Same caller/called permission contract as the x86 call above. Candidate
+    # execution remains in the explicitly contents:read build job.
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/call-build-linux-archives.yml
+    with:
+      version: ${{ inputs.version }}
+      build_matrix: ${{ needs.generate-build-matrix.outputs.arm-matrix }}
+      source_sha: ${{ inputs.source_sha }}
+      publish: false
+
+  # Release candidates skip distro packages in production (build-release.yml
+  # gates them on !rc), so qualification mirrors that applicability.
+  qualify-packages:
+    name: Qualify RPM/DEB packages
+    needs: validate-inputs
+    if: ${{ !contains(inputs.version, '-rc') }}
+    # GitHub validates the CALLED workflow's job-level permission requests
+    # against this grant even for jobs its conditions skip, so the grant
+    # must cover packages.yml's publish jobs (id-token + contents write)
+    # although publish=false skips them. This does NOT expose credentials
+    # to candidate code: every packages.yml job that executes the build
+    # (build-rpm/deb, test-rpm/deb, process-inputs, build-summary) is
+    # job-level pinned to contents:read, so only the skipped publish jobs
+    # could ever receive the broader grant.
+    permissions:
+      contents: write
+      id-token: write
+    uses: ./.github/workflows/packages.yml
+    with:
+      version: ${{ inputs.version }}
+      source_sha: ${{ inputs.source_sha }}
+      publish: false
+
+  qualification-summary:
+    name: Qualification summary
+    needs:
+      - validate-inputs
+      - generate-build-matrix
+      - qualify-linux-x86-archives
+      - qualify-linux-arm-archives
+      - qualify-packages
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Check qualification results
+        env:
+          X86: ${{ needs.qualify-linux-x86-archives.result }}
+          ARM: ${{ needs.qualify-linux-arm-archives.result }}
+          PACKAGES: ${{ needs.qualify-packages.result }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "x86 archives: $X86"
+          echo "arm archives: $ARM"
+          echo "packages:     $PACKAGES"
+          if [[ "$X86" != "success" || "$ARM" != "success" ]]; then
+            exit 1
+          fi
+          # Packages may skip only for release candidates; a GA with a
+          # skipped package matrix is a hole in the gate, not a pass.
+          if [[ "$PACKAGES" == "skipped" ]]; then
+            if [[ "$VERSION" != *-rc* ]]; then
+              echo "GA qualification cannot pass with the package matrix skipped."
+              exit 1
+            fi
+            echo "Package matrix skipped: expected for release candidate $VERSION."
+          elif [[ "$PACKAGES" != "success" ]]; then
+            exit 1
+          fi
+          echo "Qualification passed: every required build succeeded with no production write."
+
+      # package-platforms.json is needed to count the RPM/DEB matrix jobs. It
+      # is read from the same explicit automation repository/ref passed to
+      # packages.yml, so the counts match the fan-out exactly even when this
+      # reusable workflow is called from another repository.
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ needs.validate-inputs.outputs.automation_repo }}
+          ref: ${{ needs.validate-inputs.outputs.automation_sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/package-platforms.json
+          sparse-checkout-cone-mode: false
+
+      # Empty-matrix guard: a matrix axis that expands to zero jobs would
+      # otherwise let qualification go green having built nothing. Counts
+      # come from the ACTUAL matrix JSON the archive builds fanned out over,
+      # and from the committed platform config packages.yml expanded (one
+      # explicit version per qualification run).
+      - name: Enforce the complete release matrix and compute job counts
+        id: counts
+        env:
+          X86_MATRIX: ${{ needs.generate-build-matrix.outputs.x86-matrix }}
+          ARM_MATRIX: ${{ needs.generate-build-matrix.outputs.arm-matrix }}
+          PACKAGES_RESULT: ${{ needs.qualify-packages.result }}
+        run: |
+          set -euo pipefail
+          X86_COUNT=$(jq '.distro | length' <<< "$X86_MATRIX")
+          ARM_COUNT=$(jq '.distro | length' <<< "$ARM_MATRIX")
+          if [[ "$X86_COUNT" -ne 2 || "$ARM_COUNT" -ne 2 ]]; then
+            echo "Incomplete archive matrix: expected x86=2 and arm=2, got x86=$X86_COUNT arm=$ARM_COUNT."
+            exit 1
+          fi
+          ARCHIVE_JOBS=$((X86_COUNT + ARM_COUNT))
+
+          if [[ "$PACKAGES_RESULT" == "skipped" ]]; then
+            # Release candidates skip the package matrix by design.
+            RPM_JOBS=0
+            DEB_JOBS=0
+          else
+            RPM_JOBS=$(jq '(.rpm.arch | length) * (.rpm.platform | length)' .github/package-platforms.json)
+            DEB_JOBS=$(jq '(.deb.arch | length) * (.deb.platform | length)' .github/package-platforms.json)
+            if [[ "$RPM_JOBS" -ne 30 || "$DEB_JOBS" -ne 10 ]]; then
+              echo "Incomplete package matrix: expected rpm=30 and deb=10, got rpm=$RPM_JOBS deb=$DEB_JOBS."
+              exit 1
+            fi
+          fi
+
+          echo "archive_jobs=$ARCHIVE_JOBS" >> "$GITHUB_OUTPUT"
+          echo "rpm_jobs=$RPM_JOBS" >> "$GITHUB_OUTPUT"
+          echo "deb_jobs=$DEB_JOBS" >> "$GITHUB_OUTPUT"
+          echo "Job counts: archives=$ARCHIVE_JOBS rpm=$RPM_JOBS deb=$DEB_JOBS"
