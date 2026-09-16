@@ -163,6 +163,10 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      # standalone-approval declares actions:read (it inspects its own run
+      # for the approval record). It is skipped during qualification, but the
+      # validator checks every nested job's block against this grant.
+      actions: read
     uses: ./.github/workflows/packages.yml
     with:
       version: ${{ inputs.version }}
