@@ -375,6 +375,9 @@ jobs:
     permissions:
       id-token: write
       contents: write
+      # standalone-approval declares actions:read; skipped on this path, but
+      # the validator checks every nested job's block against this grant.
+      actions: read
     uses: ./.github/workflows/packages.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -397,6 +400,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      # prod-approval declares actions:read (it inspects its own run for the
+      # approval record); same validator rule as above.
+      actions: read
     uses: ./.github/workflows/update-try-valkey.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
