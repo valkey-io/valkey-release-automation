@@ -1,11 +1,10 @@
 name: Update Try Valkey
 # Security boundary: this workflow writes the production S3 bucket. The
-# workflow_call path stays ungated here because it is only reachable through
-# build-release.yml, which gates every production event shape with the
-# release-publish environment. A STANDALONE
-# workflow_dispatch of this file has no such upstream authorization, so it
-# must first pass the prod-approval job in the release-publish protected
-# environment below.
+# workflow_call path is only reachable through build-release.yml, which gates
+# every production event shape with the release-publish environment. A
+# STANDALONE workflow_dispatch proceeds without a deployment approval
+# (removed by maintainer decision: it was rubber-stamped, and the run itself
+# is the audit record); it still refuses rc and unstable versions.
 
 on:
   workflow_call:
@@ -43,63 +42,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Gates ONLY a direct workflow_dispatch of this file: on the workflow_call
-  # path github.workflow_ref points at the top-level caller
-  # (build-release.yml), so this job is skipped and no second approval is
-  # required. NOTE for the repository owner: the release-publish environment
-  # must be configured in repo settings with required reviewers, otherwise
-  # this gate approves automatically.
-  prod-approval:
-    name: Prod approval gate (standalone dispatch)
-    if: github.event_name == 'workflow_dispatch' && contains(github.workflow_ref, 'update-try-valkey.yml')
-    runs-on: ubuntu-latest
-    environment: release-publish
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Confirm standalone production dispatch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          CURRENT_SHA=$(gh api "repos/${REPO}/commits/main" --jq '.sha')
-          [[ "$GITHUB_SHA" == "$CURRENT_SHA" ]] || {
-            echo "Standalone publication must run from current main: run=$GITHUB_SHA current-main=$CURRENT_SHA" >&2
-            exit 1
-          }
-
-          ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
-          REVIEWERS=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$ENVIRONMENT")
-          PREVENT_SELF=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | any' <<< "$ENVIRONMENT")
-          ADMIN_BYPASS=$(jq -r 'if has("can_admins_bypass") then .can_admins_bypass else true end' <<< "$ENVIRONMENT")
-          CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
-          POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
-          [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
-          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
-          [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
-          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
-            echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
-            exit 1
-          }
-
-          APPROVER=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" \
-            --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
-          [[ -n "$APPROVER" ]] || { echo "No human approval record exists for release-publish" >&2; exit 1; }
-          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
-            echo "The workflow dispatcher cannot approve their own production deployment" >&2
-            exit 1
-          }
-          echo "Standalone Try Valkey publication approved by @$APPROVER through release-publish."
-
   build-try-valkey:
-    needs: prod-approval
-    # The gate is skipped on the workflow_call path, so this must run when
-    # no needed job failed rather than on plain success.
-    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

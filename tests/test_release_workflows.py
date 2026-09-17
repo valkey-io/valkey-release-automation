@@ -149,19 +149,27 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         packages = workflow("packages.yml")
         self.assertEqual(build.count("environment: release-publish"), 1)
         self.assertIn("release_gate_passed: true", build)
-        self.assertIn("standalone-approval:", packages)
         self.assertIn("release_gate_passed:", packages)
-        self.assertEqual(packages.count("environment: release-publish"), 1)
+        # The standalone deployment gates were removed by maintainer decision
+        # (rubber-stamped approvals provide no review); the release path's
+        # single prod-approval in build-release.yml is the only environment
+        # gate, and no other workflow may quietly reintroduce one.
+        self.assertNotIn("standalone-approval", packages)
+        self.assertEqual(packages.count("environment: release-publish"), 0)
+        self.assertEqual(
+            workflow("update-try-valkey.yml").count("environment: release-publish"), 0
+        )
 
-    def test_standalone_publish_paths_fail_closed(self) -> None:
-        for name in ("packages.yml", "update-try-valkey.yml"):
-            text = workflow(name)
-            self.assertIn("actions: read", text, name)
-            self.assertIn("release-publish must require a reviewer", text, name)
-            self.assertIn("release-publish must prevent self-review", text, name)
-            self.assertIn("release-publish must disable admin bypass", text, name)
-            self.assertIn("release-publish must allow exactly the main branch", text, name)
-            self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text, name)
+    def test_standalone_package_publication_refuses_release_candidates(self) -> None:
+        # With the standalone approval gate gone, the GA-only policy for the
+        # production package repository is enforcement in code, not review:
+        # a direct dispatch must not be the one entry point that can put a
+        # prerelease in front of package users.
+        packages = workflow("packages.yml")
+        self.assertIn(
+            "refusing to publish release candidate", packages
+        )
+        self.assertIn('"$EVENT_NAME" == "workflow_dispatch" && "$PUBLISH" == "true"', packages)
 
     def test_eol_debian_build_and_test_use_immutable_package_snapshot(self) -> None:
         platforms = json.loads(
