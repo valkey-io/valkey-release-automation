@@ -4,9 +4,10 @@ name: Build Release
 # contents:write permission authenticates only access to this repository; it
 # does not prove which authorized caller created the event. The protected environment therefore gates all
 # production S3 and downstream writes regardless of event shape.
-# Standalone sub-workflow dispatches must not write production: any
-# sub-workflow that also exposes workflow_dispatch gates its own standalone
-# prod path behind release-publish (see update-try-valkey.yml and packages.yml).
+# Standalone workflow_dispatch runs of sub-workflows (packages.yml,
+# update-try-valkey.yml) proceed on the dispatcher's authority without a
+# deployment approval; release-candidate versions are refused on that path
+# in code, and this release path remains the only approval-gated one.
 #
 run-name: "Build Release ${{ github.event.client_payload.version || inputs.version || 'push' }} (${{ github.event.client_payload.environment || inputs.environment || 'dev' }})"
 
@@ -377,9 +378,6 @@ jobs:
     permissions:
       id-token: write
       contents: write
-      # standalone-approval declares actions:read; skipped on this path, but
-      # the validator checks every nested job's block against this grant.
-      actions: read
     uses: ./.github/workflows/packages.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -402,9 +400,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      # prod-approval declares actions:read (it inspects its own run for the
-      # approval record); same validator rule as above.
-      actions: read
     uses: ./.github/workflows/update-try-valkey.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
