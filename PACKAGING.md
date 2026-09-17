@@ -179,7 +179,7 @@ process-inputs ──► validate version and environment
                                   └──► release-build-linux-arm-packages  (tarballs → S3)
 ```
 
-Production begins only after the `release-publish` environment is approved.
+On the release path, production begins only after the `release-publish` environment is approved.
 The workflow resolves the published Valkey tag to a commit and builds that exact
 SHA; if a dispatch supplies `source_sha`, it must match the tag. After the
 container update is opened, the workflow waits for the exact Alpine and Trixie
@@ -1070,7 +1070,7 @@ gh workflow run packages.yml \
   -f publish=true
 ```
 
-Optionally add `-f source_sha=<full 40-character valkey commit SHA>` to build from an exact commit instead of the tag archive. With `publish=true`, a standalone run pauses once at `release-publish` before its publish jobs proceed (see the provisioning section in README.md). `publish` defaults to `false`, which gives a build-and-test-only run with no production write.
+Optionally add `-f source_sha=<full 40-character valkey commit SHA>` to build from an exact commit instead of the tag archive. With `publish=true`, a standalone run publishes on your authority without a deployment approval: it must be dispatched from `main`, and release-candidate versions are refused on that path. `publish` defaults to `false`, which gives a build-and-test-only run with no production write.
 
 ### Step 6: Verify Output
 
@@ -1242,22 +1242,33 @@ publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_reg
 RPM Repositories:
   1. Import GPG key into RPM database (rpm --import)
   2. For each platform/arch artifact directory:
-     a. Stage .rpm files to staging/valkey-N/rpm/<platform>/<arch>/
-     b. Sign each .rpm with rpmsign (SHA-256 digest, required for gpgcheck=1)
-     c. Create repo metadata with createrepo_c
-     d. Sign repomd.xml with GPG detached signature
+     a. Hydrate staging/valkey-N/rpm/<platform>/<arch>/ with the packages
+        already published under that prefix in S3 (a nonexistent prefix is a
+        no-op, so the first publication into a line is unaffected)
+     b. Stage this run's .rpm files into the same directory
+     c. Sign THIS RUN's .rpm files with rpmsign (SHA-256 digest, required for
+        gpgcheck=1); hydrated packages keep the signature from their own
+        publication and are not re-signed
+     d. Create repo metadata with createrepo_c over the union, so publishing a
+        patch release does not delist the earlier patches of the same line
+     e. Sign repomd.xml with GPG detached signature
 
 DEB Repositories:
   1. For each platform/arch artifact directory:
-     a. Stage .deb files to staging/valkey-N/deb/<platform>/<arch>/
-     b. Sign each .deb with debsigs (origin signature)
-     c. Generate Packages index with dpkg-scanpackages
-     d. Generate Release file with MD5, SHA1, SHA256 checksums
-     e. Sign Release → Release.gpg (detached) + InRelease (clearsigned)
+     a. Hydrate staging/valkey-N/deb/<platform>/<arch>/ from S3 as above
+     b. Stage this run's .deb files into the same directory
+     c. Sign THIS RUN's .deb files with debsigs (origin signature)
+     d. Generate Packages index with dpkg-scanpackages --multiversion, which
+        keeps every version present rather than only the newest
+     e. Generate Release file with MD5, SHA1, SHA256 checksums
+     f. Sign Release → Release.gpg (detached) + InRelease (clearsigned)
 
 Upload:
   1. Export public GPG key as staging/GPG-KEY-valkey.asc
   2. aws s3 sync staging/ s3://<bucket>/ --acl public-read
+
+Publications are serialized by a repository-wide concurrency group, because
+every patch release of a line rewrites that line's shared index.
 ```
 
 **S3 bucket structure:**

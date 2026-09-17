@@ -2,6 +2,8 @@ import json
 import unittest
 from pathlib import Path
 
+import yaml
+
 WORKFLOWS = Path(".github/workflows")
 
 
@@ -149,19 +151,50 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         packages = workflow("packages.yml")
         self.assertEqual(build.count("environment: release-publish"), 1)
         self.assertIn("release_gate_passed: true", build)
-        self.assertIn("standalone-approval:", packages)
         self.assertIn("release_gate_passed:", packages)
-        self.assertEqual(packages.count("environment: release-publish"), 1)
+        # The standalone deployment gates were removed by maintainer decision
+        # (rubber-stamped approvals provide no review); the release path's
+        # single prod-approval in build-release.yml is the only environment
+        # gate, and no other workflow may quietly reintroduce one.
+        self.assertNotIn("standalone-approval", packages)
+        self.assertEqual(packages.count("environment: release-publish"), 0)
+        self.assertEqual(
+            workflow("update-try-valkey.yml").count("environment: release-publish"), 0
+        )
 
-    def test_standalone_publish_paths_fail_closed(self) -> None:
-        for name in ("packages.yml", "update-try-valkey.yml"):
-            text = workflow(name)
-            self.assertIn("actions: read", text, name)
-            self.assertIn("release-publish must require a reviewer", text, name)
-            self.assertIn("release-publish must prevent self-review", text, name)
-            self.assertIn("release-publish must disable admin bypass", text, name)
-            self.assertIn("release-publish must allow exactly the main branch", text, name)
-            self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text, name)
+    def test_standalone_package_publication_refuses_release_candidates(self) -> None:
+        # With the standalone approval gate gone, the GA-only policy for the
+        # production package repository is enforcement in code, not review:
+        # a direct dispatch must not be the one entry point that can put a
+        # prerelease in front of package users.
+        packages = workflow("packages.yml")
+        self.assertIn(
+            "refusing to publish release candidate", packages
+        )
+        self.assertIn('"$EVENT_NAME" == "workflow_dispatch" && "$PUBLISH" == "true"', packages)
+
+    def test_every_production_publisher_requires_main(self) -> None:
+        # The removed standalone-approval jobs also carried a current-main SHA
+        # check, and dropping them dropped that control: workflow_dispatch runs
+        # the workflow file from the ref it selects, so without a main
+        # requirement a branch carrying an edited publish step could write the
+        # production package repository or Try Valkey bucket on the
+        # dispatcher's authority alone. Each production-writing job must state
+        # the requirement in its own `if:`; inheriting it through `needs:` is
+        # not a substitute, because success() with a skipped dependency is
+        # subtle enough to get wrong.
+        for name, jobs in (
+            ("packages.yml", ("publish-to-s3", "deploy-pages")),
+            ("update-try-valkey.yml", ("upload-try-valkey",)),
+        ):
+            doc = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+            for job in jobs:
+                condition = str((doc["jobs"][job] or {}).get("if", ""))
+                self.assertIn(
+                    "github.ref == 'refs/heads/main'",
+                    condition,
+                    f"{name}:{job} writes production without requiring main",
+                )
 
     def test_eol_debian_build_and_test_use_immutable_package_snapshot(self) -> None:
         platforms = json.loads(
@@ -202,11 +235,10 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
     def test_downstream_prs_notify_the_production_approver_once(self) -> None:
         build = workflow("build-release.yml")
         self.assertIn("release_owner: ${{ steps.approver.outputs.login }}", build)
-        self.assertIn('echo "login=$APPROVER" >> "$GITHUB_OUTPUT"', build)
-        self.assertEqual(
-            build.count("release_owner: ${{ needs.prod-approval.outputs.release_owner }}"),
-            4,
-        )
+        # The notification is reconciled on every run that has a PR, guarded
+        # by an idempotence marker: gating on pull-request-operation ==
+        # 'created' meant a comment that failed after PR creation was never
+        # retried, because the rerun sees the PR as 'updated'.
         for name in (
             "update-valkey-container.yml",
             "update-valkey-doc.yml",
@@ -214,12 +246,22 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             "update-valkey-website.yml",
         ):
             text = workflow(name)
-            self.assertIn("release_owner:", text, name)
-            self.assertIn("id: create-pr", text, name)
-            self.assertIn("- name: Notify release owner", text, name)
-            self.assertIn("please review this automated release PR", text, name)
-            self.assertIn("steps.create-pr.outputs.pull-request-operation == 'created'", text, name)
-            self.assertIn("gh pr comment", text, name)
+            self.assertNotIn("pull-request-operation == 'created'", text, name)
+            self.assertIn("steps.create-pr.outputs.pull-request-number != ''", text, name)
+            self.assertIn("<!-- release-owner-notification -->", text, name)
+            # The body is built with printf: a body continued on an indented
+            # YAML line renders as a Markdown code block and the @mention
+            # never pings.
+            self.assertIn("BODY=$(printf", text, name)
+            # Restored from the pre-reconcile version of this test: the
+            # approval identity must still flow to every downstream PR.
+            self.assertIn("release_owner:", workflow("build-release.yml"))
+            self.assertIn("RELEASE_OWNER: ${{ inputs.release_owner }}", text, name)
+        # apt keeps prior patches in the index only with --multiversion.
+        self.assertIn(
+            "dpkg-scanpackages --multiversion",
+            Path("scripts/publish-to-s3.sh").read_text(encoding="utf-8"),
+        )
 
     def test_helm_update_is_reviewable_and_cannot_publish_a_chart(self) -> None:
         text = workflow("update-valkey-helm.yml")
@@ -231,3 +273,165 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPermissionMesh(unittest.TestCase):
+    """Every reusable-workflow call must satisfy GitHub's permission validator.
+
+    GitHub validates a called workflow's job `permissions:` blocks against the
+    CALLER JOB's effective permissions at run startup - including jobs whose
+    `if:` would skip them, and transitively through nested calls. A violation
+    is a startup_failure in production (this broke the 9.2.0-rc1 builds until
+    the callers granted the actions:read their approval jobs declared). This
+    test enforces the same subset rule statically so the break happens in CI.
+    """
+
+    _RANK = {"none": 0, "read": 1, "write": 2}
+    # Every GITHUB_TOKEN scope with the levels it actually supports. The
+    # shorthands expand against THIS table rather than a uniform "read"/"write"
+    # for all: id-token has no read level, so read-all leaves it none, and a
+    # scope missing from the table would make a real request invisible.
+    _SCOPES = {
+        "actions": ("read", "write"),
+        "attestations": ("read", "write"),
+        "checks": ("read", "write"),
+        "contents": ("read", "write"),
+        "deployments": ("read", "write"),
+        "discussions": ("read", "write"),
+        "id-token": ("write",),
+        "issues": ("read", "write"),
+        "models": ("read",),
+        "packages": ("read", "write"),
+        "pages": ("read", "write"),
+        "pull-requests": ("read", "write"),
+        "repository-projects": ("read", "write"),
+        "security-events": ("read", "write"),
+        "statuses": ("read", "write"),
+    }
+
+    @classmethod
+    def _shorthand(cls, level):
+        """Expand read-all / write-all against each scope's supported levels."""
+        out = {}
+        for scope, supported in cls._SCOPES.items():
+            if level in supported:
+                out[scope] = level
+            elif level == "write" and "write" not in supported:
+                out[scope] = supported[-1]
+        return out
+
+    @classmethod
+    def _norm(cls, perms):
+        if perms is None:
+            return None
+        if perms == "read-all":
+            return cls._shorthand("read")
+        if perms == "write-all":
+            return cls._shorthand("write")
+        return dict(perms or {})
+
+    @classmethod
+    def _load(cls):
+        # Both extensions: GitHub accepts .yaml, so globbing only .yml would
+        # let a .yaml workflow escape every check in this class.
+        workflows = {}
+        paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
+        for path in paths:
+            doc = yaml.safe_load(path.read_text())
+            wf_perms = cls._norm(doc.get("permissions"))
+            jobs = {}
+            for name, job in (doc.get("jobs") or {}).items():
+                own = cls._norm(job.get("permissions"))
+                jobs[name] = {
+                    "own": own,
+                    "effective": own if own is not None else wf_perms,
+                    "uses": job.get("uses"),
+                }
+            workflows[path.name] = {"wf_perms": wf_perms, "jobs": jobs}
+        return workflows
+
+    @staticmethod
+    def _local_target(uses):
+        """The workflow filename a local `uses:` refers to, else None.
+
+        Local calls are `./.github/workflows/<file>`; anything else is a call
+        into another repository, which this class refuses rather than skips.
+        """
+        if not uses:
+            return None
+        if uses.startswith("./"):
+            return uses.rsplit("/", 1)[-1]
+        return None
+
+    @classmethod
+    def _requirements(cls, workflows, wf_name, chain):
+        """Every permission request in wf_name and its nested local calls."""
+        reqs = []
+        wf = workflows[wf_name]
+        for jname, job in wf["jobs"].items():
+            label = f"{wf_name}:{jname}"
+            req = job["own"] if job["own"] is not None else wf["wf_perms"]
+            reqs.append((label, req or {}))
+            nested = cls._local_target(job["uses"])
+            if nested and nested in workflows:
+                if nested in chain:
+                    # A cycle is an invalid call graph, not something to
+                    # quietly stop walking: name the chain instead.
+                    raise AssertionError(
+                        "reusable workflow call cycle: "
+                        + " -> ".join(chain + [nested])
+                    )
+                reqs.extend(cls._requirements(workflows, nested, chain + [nested]))
+        return reqs
+
+    def test_every_local_call_satisfies_the_permission_validator(self) -> None:
+        workflows = self._load()
+        violations = []
+        edges = 0
+        for wname, wf in workflows.items():
+            for jname, job in wf["jobs"].items():
+                called = self._local_target(job["uses"])
+                if called is None:
+                    continue
+                self.assertIn(called, workflows, f"{wname}:{jname} calls missing {called}")
+                edges += 1
+                cap = job["effective"] or {}
+                for label, req in self._requirements(workflows, called, [called]):
+                    for scope, level in req.items():
+                        have = cap.get(scope, "none")
+                        if self._RANK.get(have, 0) < self._RANK.get(level, 0):
+                            violations.append(
+                                f"{wname}:{jname} -> {label}: needs {scope}:{level}, "
+                                f"caller grants {scope}:{have} (startup_failure in prod)"
+                            )
+        self.assertGreater(edges, 0, "no call edges found; the mesh test is not testing anything")
+        self.assertEqual(violations, [])
+
+    def test_no_reusable_workflow_is_called_from_another_repository(self) -> None:
+        # GitHub applies the same permission ceiling to an external reusable
+        # workflow, but its job blocks are not in this repository, so the
+        # subset rule above cannot be checked for one. Rather than skip such
+        # an edge and keep the outage class alive unnoticed, refuse it: an
+        # intentional external call is a deliberate change to this list with
+        # its permission contract reviewed at the same time.
+        workflows = self._load()
+        external = [
+            f"{wname}:{jname} -> {job['uses']}"
+            for wname, wf in workflows.items()
+            for jname, job in wf["jobs"].items()
+            if job["uses"] and self._local_target(job["uses"]) is None
+        ]
+        self.assertEqual(external, [])
+
+    def test_no_job_relies_on_the_implicit_repository_default(self) -> None:
+        # A job with neither its own nor a workflow-level permissions block
+        # gets whatever the repository settings say, which nobody reviews in
+        # a PR. Every job must resolve to an explicit, reviewed grant.
+        workflows = self._load()
+        implicit = [
+            f"{wname}:{jname}"
+            for wname, wf in workflows.items()
+            for jname, job in wf["jobs"].items()
+            if job["effective"] is None
+        ]
+        self.assertEqual(implicit, [])

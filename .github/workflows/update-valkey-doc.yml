@@ -12,6 +12,10 @@ on:
         description: "GitHub login that approved the production release"
         required: true
 
+# GITHUB_TOKEN is read-only here; cross-repo writes use in-job App tokens.
+permissions:
+  contents: read
+
 jobs:
   update-valkey-doc:
     runs-on: ubuntu-latest
@@ -214,8 +218,29 @@ jobs:
             This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)
 
       - name: Notify release owner
-        if: steps.create-pr.outputs.pull-request-operation == 'created'
+        # Reconciled on every run that has a PR, not only on creation: a
+        # comment that failed after the PR was created would otherwise never
+        # be retried, because the rerun finds the PR as 'updated'. The marker
+        # makes the reconcile idempotent.
+        if: steps.create-pr.outputs.pull-request-number != ''
         env:
           GH_TOKEN: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
           RELEASE_OWNER: ${{ inputs.release_owner }}
-        run: gh pr comment "${{ steps.create-pr.outputs.pull-request-number }}" --repo "${{ github.repository_owner }}/valkey-doc" --body "@$RELEASE_OWNER, please review this automated release PR."
+          PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+          TARGET_REPO: ${{ github.repository_owner }}/valkey-doc
+        run: |
+          set -euo pipefail
+          MARKER="<!-- release-owner-notification -->"
+          # Capture-then-search, never pipe-as-condition: a gh failure inside
+          # an if-pipeline reads as "marker absent" and posts a duplicate,
+          # the exact outcome this reconcile exists to prevent.
+          if ! COMMENTS=$(gh pr view "$PR_NUMBER" --repo "$TARGET_REPO" --json comments --jq '.comments[].body'); then
+            echo "Could not inspect existing comments on ${TARGET_REPO}#${PR_NUMBER}" >&2
+            exit 1
+          fi
+          if grep -F "$MARKER" >/dev/null <<<"$COMMENTS"; then
+            echo "Release owner already notified on ${TARGET_REPO}#${PR_NUMBER}."
+            exit 0
+          fi
+          BODY=$(printf '%s\n@%s, please review this automated release PR.' "$MARKER" "$RELEASE_OWNER")
+          gh pr comment "$PR_NUMBER" --repo "$TARGET_REPO" --body "$BODY"

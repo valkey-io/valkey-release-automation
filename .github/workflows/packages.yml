@@ -1,7 +1,9 @@
 name: Build Valkey Packages (RPM + DEB)
 # publish defaults to false. The normal release caller may set
 # release_gate_passed only after build-release's release-publish job succeeds.
-# A direct dispatch cannot set that input and must pass the standalone gate.
+# A direct dispatch with publish=true proceeds without a deployment approval
+# (removed by maintainer decision: it was rubber-stamped, and the run itself
+# is the audit record). Release-candidate versions are refused in code.
 
 on:
   workflow_call:
@@ -58,55 +60,16 @@ permissions:
 
 concurrency:
   group: packages-${{ inputs.version || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: false
+  # PR validation supersedes itself: a new push makes the previous head's
+  # matrix irrelevant, and queueing behind it delays the feedback that
+  # matters. Publication never cancels: an interrupted publish leaves
+  # half-written repository metadata. A publish is unreachable from a
+  # pull_request event (publish-to-s3 and deploy-pages both require
+  # inputs.publish), and in a called workflow github.event_name is the
+  # caller's event, so this is true only for PR validation runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  standalone-approval:
-    name: Standalone publish approval
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
-    runs-on: ubuntu-latest
-    environment: release-publish
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Confirm standalone production dispatch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          CURRENT_SHA=$(gh api "repos/${REPO}/commits/main" --jq '.sha')
-          [[ "$GITHUB_SHA" == "$CURRENT_SHA" ]] || {
-            echo "Standalone publication must run from current main: run=$GITHUB_SHA current-main=$CURRENT_SHA" >&2
-            exit 1
-          }
-
-          ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
-          REVIEWERS=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' <<< "$ENVIRONMENT")
-          PREVENT_SELF=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | any' <<< "$ENVIRONMENT")
-          ADMIN_BYPASS=$(jq -r 'if has("can_admins_bypass") then .can_admins_bypass else true end' <<< "$ENVIRONMENT")
-          CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
-          POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
-          [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
-          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
-          [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
-          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
-            echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
-            exit 1
-          }
-
-          APPROVER=$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/approvals" \
-            --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
-          [[ -n "$APPROVER" ]] || { echo "No human approval record exists for release-publish" >&2; exit 1; }
-          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
-            echo "The workflow dispatcher cannot approve their own production deployment" >&2
-            exit 1
-          }
-          echo "Standalone package publication approved by @$APPROVER through release-publish."
-
   ############################################################################
   # Process Inputs
   ############################################################################
@@ -152,6 +115,15 @@ jobs:
           if [ -n "$VERSION" ] && [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
             echo "ERROR: Invalid version format '${VERSION}'."
             echo "Expected: x.y.z or x.y.z-rcN (e.g., 9.0.3, 8.1.0-rc1)"
+            exit 1
+          fi
+          # The production package repository is GA-only: build-release skips
+          # packages for rc tags, and a direct dispatch must not be the one
+          # entry point that can put a prerelease in front of package users.
+          # With the standalone approval gate removed, this is enforcement,
+          # not review.
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$PUBLISH" == "true" && "$VERSION" == *"-rc"* ]]; then
+            echo "ERROR: refusing to publish release candidate ${VERSION} packages to the production repository."
             exit 1
           fi
           if [[ -n "$SOURCE_SHA" && ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -760,15 +732,26 @@ jobs:
   ############################################################################
   publish-to-s3:
     name: Publish to S3
-    needs: [standalone-approval, process-inputs, build-rpm, build-deb, test-rpm, test-deb]
+    needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb]
+    # One publication at a time, globally: patch releases share their
+    # major/minor repository directory, and the hydrate-then-regenerate
+    # index build must not interleave with another publication's.
+    concurrency:
+      group: packages-publish-s3
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     # Called release: build-release already proved its environment approval.
-    # Direct dispatch: standalone-approval proves it here. Qualification has
-    # publish=false and cannot reach either branch.
+    # Direct dispatch publishes without an approval gate; process-inputs
+    # refuses rc versions on that path. Both paths still require main:
+    # workflow_dispatch runs the workflow file from the ref it selects, so
+    # without this a branch carrying an edited packages.yml could publish to
+    # the production repository. Qualification has publish=false and cannot
+    # reach either branch.
     if: >-
       ${{ !failure() && !cancelled() && inputs.publish == true &&
-          ((inputs.release_gate_passed == true && github.ref == 'refs/heads/main') ||
-           (github.event_name == 'workflow_dispatch' && needs.standalone-approval.result == 'success')) }}
+          github.ref == 'refs/heads/main' &&
+          ((inputs.release_gate_passed == true) ||
+           github.event_name == 'workflow_dispatch') }}
     permissions:
       id-token: write
       contents: read
@@ -824,7 +807,10 @@ jobs:
     name: Deploy Pages
     needs: [process-inputs, publish-to-s3]
     runs-on: ubuntu-latest
-    if: ${{ success() && inputs.publish == true }}
+    # publish-to-s3 already requires main, but state it here too: success()
+    # with a skipped dependency is subtle, and this job writes the public
+    # install instructions.
+    if: ${{ success() && inputs.publish == true && github.ref == 'refs/heads/main' }}
     permissions:
       id-token: write
       contents: write

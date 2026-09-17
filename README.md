@@ -73,11 +73,11 @@ Add this token as a secret in your repository (ex: `PAT_TOKEN`).
 - The secret value for this token is the arn of the IAM role that you just created.
 
 ## 4. Provision the release-publish Protected Environment
-Production writes in this repository are gated behind a GitHub protected environment named `release-publish`. Without it, the gate jobs approve automatically and provide no protection.
+The release path's production writes are gated behind a GitHub protected environment named `release-publish`. Without it, the gate job approves automatically and provides no protection. Standalone `workflow_dispatch` publications are a deliberate exception, described below.
 - Go to the repository Settings, then Environments, and create an environment named exactly `release-publish`.
 - Enable **Required reviewers** and add at least one release maintainer (up to six reviewers are allowed).
 - Enable **Prevent self-review** so the person dispatching a production run cannot approve their own deployment.
-- This environment gates the `prod-approval` job on **every** production invocation of `build-release.yml` (including `repository_dispatch`) and the standalone publish gates in `update-try-valkey.yml` and `packages.yml`. Called subworkflows consume the already-approved release path and do not ask again.
+- This environment gates the `prod-approval` job on **every** production invocation of `build-release.yml` (including `repository_dispatch`). Called subworkflows consume the already-approved release path and do not ask again. Standalone `workflow_dispatch` runs of `packages.yml` and `update-try-valkey.yml` proceed on the dispatcher's authority without a deployment approval; release-candidate versions are refused on that path in code, and every production-writing job requires `refs/heads/main`, so a branch carrying an edited publish step cannot write production.
 - Prevent admin bypass and restrict deployment branches to the exact default branch. A contents-write token can create `repository_dispatch` events, so their payload is never treated as production authorization.
 - Every production build resolves the published Valkey tag to a full
   lowercase 40-character commit SHA. An explicitly supplied `source_sha` must

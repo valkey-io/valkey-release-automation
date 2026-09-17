@@ -17,6 +17,10 @@ on:
         type: string
         required: true
 
+# GITHUB_TOKEN is read-only here; cross-repo writes use in-job App tokens.
+permissions:
+  contents: read
+
 jobs:
   commit-hash:
     runs-on: ubuntu-latest

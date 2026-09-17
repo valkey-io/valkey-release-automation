@@ -28,7 +28,22 @@ mkdir -p "${SITE_DIR}"
 ################################################################################
 echo "Listing versions from s3://${S3_BUCKET}/packaging/..."
 AVAILABLE_VERSIONS=""
-S3_DIRS=$(aws s3 ls "s3://${S3_BUCKET}/packaging/" --region "$S3_REGION" 2>/dev/null | awk '/PRE valkey-/ {gsub(/PRE /,""); gsub(/\//,""); print}') || true
+# Fail closed on discovery errors: a transient listing failure must abort
+# rather than publish an index.html that hides every other release line.
+# aws s3 ls exits 1 with NO output on either stream for a nonexistent prefix,
+# which is the legitimate first-ever publication. A real API failure such as
+# AccessDenied also exits 1 with empty stdout, so stderr is what separates
+# them and both streams are checked here.
+LS_RC=0
+LS_ERR_FILE=$(mktemp)
+trap 'rm -f "$LS_ERR_FILE"' EXIT
+LS_OUT=$(aws s3 ls "s3://${S3_BUCKET}/packaging/" --region "$S3_REGION" 2>"$LS_ERR_FILE") || LS_RC=$?
+LS_ERR=$(cat "$LS_ERR_FILE")
+if [ "$LS_RC" -ne 0 ] && { [ "$LS_RC" -ne 1 ] || [ -n "$LS_OUT" ] || [ -n "$LS_ERR" ]; }; then
+  echo "ERROR: could not list existing package repositories (exit ${LS_RC}): ${LS_ERR:-no stderr}; refusing to publish a partial index." >&2
+  exit 1
+fi
+S3_DIRS=$(printf '%s\n' "$LS_OUT" | awk '/PRE valkey-/ {gsub(/PRE /,""); gsub(/\//,""); print}')
 
 for vdir in $S3_DIRS; do
   ver="${vdir#valkey-}"
