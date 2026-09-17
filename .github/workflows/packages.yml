@@ -60,7 +60,14 @@ permissions:
 
 concurrency:
   group: packages-${{ inputs.version || github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: false
+  # PR validation supersedes itself: a new push makes the previous head's
+  # matrix irrelevant, and queueing behind it delays the feedback that
+  # matters. Publication never cancels: an interrupted publish leaves
+  # half-written repository metadata. A publish is unreachable from a
+  # pull_request event (publish-to-s3 and deploy-pages both require
+  # inputs.publish), and in a called workflow github.event_name is the
+  # caller's event, so this is true only for PR validation runs.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ############################################################################
