@@ -21,7 +21,6 @@ on 7.2/8.0, VALKEY_VENDORED_JEMALLOC from 8.1 on). See valkey-io/valkey#1882.
 +++ b/src/Makefile
 @@ -297,9 +297,14 @@
  endif
- 
  ifeq ($(MALLOC),jemalloc)
 +ifeq ($(USE_SYSTEM_JEMALLOC),yes)
 +	FINAL_CFLAGS+= -DUSE_JEMALLOC -DUSE_SYSTEM_JEMALLOC -DJEMALLOC_NO_DEMANGLE
