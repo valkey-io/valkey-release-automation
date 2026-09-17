@@ -165,8 +165,10 @@ jobs:
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
           echo "trigger_bundle=${TRIGGER_BUNDLE}" >> "$GITHUB_OUTPUT"
 
-  # Every production request must pass the release-publish protected
-  # environment before any downstream job runs. The dev path is never gated.
+  # Every production request on THIS release path must pass the
+  # release-publish protected environment before any downstream job runs. The
+  # dev path is never gated, and standalone sub-workflow dispatches are gated
+  # by main plus their own in-code policy instead (see the header).
   # NOTE for the repository owner: configure required reviewers, prevent
   # self-review/admin bypass, and restrict deployment branches; otherwise the
   # environment is not a meaningful capability boundary.

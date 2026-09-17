@@ -215,7 +215,12 @@ jobs:
 
   upload-try-valkey:
     needs: build-try-valkey
-    if: needs.build-try-valkey.outputs.should_build == 'true'
+    # Requires main on both paths: a standalone workflow_dispatch runs the
+    # workflow file from the ref it selects, so without this a branch
+    # carrying an edited upload step could write the production bucket.
+    if: >-
+      ${{ needs.build-try-valkey.outputs.should_build == 'true' &&
+          github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

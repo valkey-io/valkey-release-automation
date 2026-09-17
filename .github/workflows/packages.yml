@@ -742,11 +742,15 @@ jobs:
     runs-on: ubuntu-latest
     # Called release: build-release already proved its environment approval.
     # Direct dispatch publishes without an approval gate; process-inputs
-    # refuses rc versions on that path. Qualification has publish=false and
-    # cannot reach either branch.
+    # refuses rc versions on that path. Both paths still require main:
+    # workflow_dispatch runs the workflow file from the ref it selects, so
+    # without this a branch carrying an edited packages.yml could publish to
+    # the production repository. Qualification has publish=false and cannot
+    # reach either branch.
     if: >-
       ${{ !failure() && !cancelled() && inputs.publish == true &&
-          ((inputs.release_gate_passed == true && github.ref == 'refs/heads/main') ||
+          github.ref == 'refs/heads/main' &&
+          ((inputs.release_gate_passed == true) ||
            github.event_name == 'workflow_dispatch') }}
     permissions:
       id-token: write
@@ -803,7 +807,10 @@ jobs:
     name: Deploy Pages
     needs: [process-inputs, publish-to-s3]
     runs-on: ubuntu-latest
-    if: ${{ success() && inputs.publish == true }}
+    # publish-to-s3 already requires main, but state it here too: success()
+    # with a skipped dependency is subtle, and this job writes the public
+    # install instructions.
+    if: ${{ success() && inputs.publish == true && github.ref == 'refs/heads/main' }}
     permissions:
       id-token: write
       contents: write

@@ -173,6 +173,29 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         )
         self.assertIn('"$EVENT_NAME" == "workflow_dispatch" && "$PUBLISH" == "true"', packages)
 
+    def test_every_production_publisher_requires_main(self) -> None:
+        # The removed standalone-approval jobs also carried a current-main SHA
+        # check, and dropping them dropped that control: workflow_dispatch runs
+        # the workflow file from the ref it selects, so without a main
+        # requirement a branch carrying an edited publish step could write the
+        # production package repository or Try Valkey bucket on the
+        # dispatcher's authority alone. Each production-writing job must state
+        # the requirement in its own `if:`; inheriting it through `needs:` is
+        # not a substitute, because success() with a skipped dependency is
+        # subtle enough to get wrong.
+        for name, jobs in (
+            ("packages.yml", ("publish-to-s3", "deploy-pages")),
+            ("update-try-valkey.yml", ("upload-try-valkey",)),
+        ):
+            doc = yaml.safe_load((WORKFLOWS / name).read_text(encoding="utf-8"))
+            for job in jobs:
+                condition = str((doc["jobs"][job] or {}).get("if", ""))
+                self.assertIn(
+                    "github.ref == 'refs/heads/main'",
+                    condition,
+                    f"{name}:{job} writes production without requiring main",
+                )
+
     def test_eol_debian_build_and_test_use_immutable_package_snapshot(self) -> None:
         platforms = json.loads(
             Path(".github/package-platforms.json").read_text(encoding="utf-8")
@@ -264,26 +287,56 @@ class TestPermissionMesh(unittest.TestCase):
     """
 
     _RANK = {"none": 0, "read": 1, "write": 2}
-    _SCOPES = [
-        "actions", "attestations", "checks", "contents", "deployments",
-        "discussions", "id-token", "issues", "packages", "pages",
-        "pull-requests", "repository-projects", "security-events", "statuses",
-    ]
+    # Every GITHUB_TOKEN scope with the levels it actually supports. The
+    # shorthands expand against THIS table rather than a uniform "read"/"write"
+    # for all: id-token has no read level, so read-all leaves it none, and a
+    # scope missing from the table would make a real request invisible.
+    _SCOPES = {
+        "actions": ("read", "write"),
+        "attestations": ("read", "write"),
+        "checks": ("read", "write"),
+        "contents": ("read", "write"),
+        "deployments": ("read", "write"),
+        "discussions": ("read", "write"),
+        "id-token": ("write",),
+        "issues": ("read", "write"),
+        "models": ("read",),
+        "packages": ("read", "write"),
+        "pages": ("read", "write"),
+        "pull-requests": ("read", "write"),
+        "repository-projects": ("read", "write"),
+        "security-events": ("read", "write"),
+        "statuses": ("read", "write"),
+    }
+
+    @classmethod
+    def _shorthand(cls, level):
+        """Expand read-all / write-all against each scope's supported levels."""
+        out = {}
+        for scope, supported in cls._SCOPES.items():
+            if level in supported:
+                out[scope] = level
+            elif level == "write" and "write" not in supported:
+                out[scope] = supported[-1]
+        return out
 
     @classmethod
     def _norm(cls, perms):
         if perms is None:
             return None
         if perms == "read-all":
-            return {s: "read" for s in cls._SCOPES}
+            return cls._shorthand("read")
         if perms == "write-all":
-            return {s: "write" for s in cls._SCOPES}
+            return cls._shorthand("write")
         return dict(perms or {})
 
     @classmethod
     def _load(cls):
+        # Both extensions: GitHub accepts .yaml, so globbing only .yml would
+        # let a .yaml workflow escape every check in this class.
         workflows = {}
-        for path in sorted(WORKFLOWS.glob("*.yml")):
+        paths = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
+        for path in paths:
             doc = yaml.safe_load(path.read_text())
             wf_perms = cls._norm(doc.get("permissions"))
             jobs = {}
@@ -297,6 +350,19 @@ class TestPermissionMesh(unittest.TestCase):
             workflows[path.name] = {"wf_perms": wf_perms, "jobs": jobs}
         return workflows
 
+    @staticmethod
+    def _local_target(uses):
+        """The workflow filename a local `uses:` refers to, else None.
+
+        Local calls are `./.github/workflows/<file>`; anything else is a call
+        into another repository, which this class refuses rather than skips.
+        """
+        if not uses:
+            return None
+        if uses.startswith("./"):
+            return uses.rsplit("/", 1)[-1]
+        return None
+
     @classmethod
     def _requirements(cls, workflows, wf_name, chain):
         """Every permission request in wf_name and its nested local calls."""
@@ -306,11 +372,16 @@ class TestPermissionMesh(unittest.TestCase):
             label = f"{wf_name}:{jname}"
             req = job["own"] if job["own"] is not None else wf["wf_perms"]
             reqs.append((label, req or {}))
-            uses = job["uses"] or ""
-            if uses.startswith("./"):
-                nested = uses.rsplit("/", 1)[-1]
-                if nested in workflows and nested not in chain:
-                    reqs.extend(cls._requirements(workflows, nested, chain + [nested]))
+            nested = cls._local_target(job["uses"])
+            if nested and nested in workflows:
+                if nested in chain:
+                    # A cycle is an invalid call graph, not something to
+                    # quietly stop walking: name the chain instead.
+                    raise AssertionError(
+                        "reusable workflow call cycle: "
+                        + " -> ".join(chain + [nested])
+                    )
+                reqs.extend(cls._requirements(workflows, nested, chain + [nested]))
         return reqs
 
     def test_every_local_call_satisfies_the_permission_validator(self) -> None:
@@ -319,10 +390,9 @@ class TestPermissionMesh(unittest.TestCase):
         edges = 0
         for wname, wf in workflows.items():
             for jname, job in wf["jobs"].items():
-                uses = job["uses"] or ""
-                if not uses.startswith("./"):
+                called = self._local_target(job["uses"])
+                if called is None:
                     continue
-                called = uses.rsplit("/", 1)[-1]
                 self.assertIn(called, workflows, f"{wname}:{jname} calls missing {called}")
                 edges += 1
                 cap = job["effective"] or {}
@@ -336,6 +406,22 @@ class TestPermissionMesh(unittest.TestCase):
                             )
         self.assertGreater(edges, 0, "no call edges found; the mesh test is not testing anything")
         self.assertEqual(violations, [])
+
+    def test_no_reusable_workflow_is_called_from_another_repository(self) -> None:
+        # GitHub applies the same permission ceiling to an external reusable
+        # workflow, but its job blocks are not in this repository, so the
+        # subset rule above cannot be checked for one. Rather than skip such
+        # an edge and keep the outage class alive unnoticed, refuse it: an
+        # intentional external call is a deliberate change to this list with
+        # its permission contract reviewed at the same time.
+        workflows = self._load()
+        external = [
+            f"{wname}:{jname} -> {job['uses']}"
+            for wname, wf in workflows.items()
+            for jname, job in wf["jobs"].items()
+            if job["uses"] and self._local_target(job["uses"]) is None
+        ]
+        self.assertEqual(external, [])
 
     def test_no_job_relies_on_the_implicit_repository_default(self) -> None:
         # A job with neither its own nor a workflow-level permissions block
