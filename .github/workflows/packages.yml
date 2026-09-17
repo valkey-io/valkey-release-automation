@@ -726,6 +726,12 @@ jobs:
   publish-to-s3:
     name: Publish to S3
     needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb]
+    # One publication at a time, globally: patch releases share their
+    # major/minor repository directory, and the hydrate-then-regenerate
+    # index build must not interleave with another publication's.
+    concurrency:
+      group: packages-publish-s3
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     # Called release: build-release already proved its environment approval.
     # Direct dispatch publishes without an approval gate; process-inputs

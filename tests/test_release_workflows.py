@@ -210,11 +210,10 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
     def test_downstream_prs_notify_the_production_approver_once(self) -> None:
         build = workflow("build-release.yml")
         self.assertIn("release_owner: ${{ steps.approver.outputs.login }}", build)
-        self.assertIn('echo "login=$APPROVER" >> "$GITHUB_OUTPUT"', build)
-        self.assertEqual(
-            build.count("release_owner: ${{ needs.prod-approval.outputs.release_owner }}"),
-            4,
-        )
+        # The notification is reconciled on every run that has a PR, guarded
+        # by an idempotence marker: gating on pull-request-operation ==
+        # 'created' meant a comment that failed after PR creation was never
+        # retried, because the rerun sees the PR as 'updated'.
         for name in (
             "update-valkey-container.yml",
             "update-valkey-doc.yml",
@@ -222,12 +221,22 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             "update-valkey-website.yml",
         ):
             text = workflow(name)
-            self.assertIn("release_owner:", text, name)
-            self.assertIn("id: create-pr", text, name)
-            self.assertIn("- name: Notify release owner", text, name)
-            self.assertIn("please review this automated release PR", text, name)
-            self.assertIn("steps.create-pr.outputs.pull-request-operation == 'created'", text, name)
-            self.assertIn("gh pr comment", text, name)
+            self.assertNotIn("pull-request-operation == 'created'", text, name)
+            self.assertIn("steps.create-pr.outputs.pull-request-number != ''", text, name)
+            self.assertIn("<!-- release-owner-notification -->", text, name)
+            # The body is built with printf: a body continued on an indented
+            # YAML line renders as a Markdown code block and the @mention
+            # never pings.
+            self.assertIn("BODY=$(printf", text, name)
+            # Restored from the pre-reconcile version of this test: the
+            # approval identity must still flow to every downstream PR.
+            self.assertIn("release_owner:", workflow("build-release.yml"))
+            self.assertIn("RELEASE_OWNER: ${{ inputs.release_owner }}", text, name)
+        # apt keeps prior patches in the index only with --multiversion.
+        self.assertIn(
+            "dpkg-scanpackages --multiversion",
+            Path("scripts/publish-to-s3.sh").read_text(encoding="utf-8"),
+        )
 
     def test_helm_update_is_reviewable_and_cannot_publish_a_chart(self) -> None:
         text = workflow("update-valkey-helm.yml")

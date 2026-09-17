@@ -41,16 +41,28 @@ for dir in "${ARTIFACTS_DIR}"/valkey-rpms-*/; do
 
   echo "=== RPM repo: ${REPO_NAME}/${platform}/${arch} ==="
   mkdir -p "$dest"
+
+  # Hydrate the packages this repository already serves. The indexes are
+  # regenerated from the staging directory, so without this a patch release
+  # would publish metadata listing only itself and delist every earlier
+  # patch from yum, even though their files remain in the bucket. Packages
+  # only: the metadata is rebuilt below over the union. Fails closed - a
+  # listing error must not regenerate indexes from a partial set.
+  aws s3 sync "s3://${S3_BUCKET}/packaging/${REPO_NAME}/rpm/${platform}/${arch}/" "$dest/" \
+    --exclude "*" --include "*.rpm" --region "$S3_REGION"
+
   cp "$dir"/*.rpm "$dest/" 2>/dev/null || true
 
-  # Sign individual RPM packages (required for gpgcheck=1)
+  # Sign only this run's packages (required for gpgcheck=1). Hydrated
+  # packages were signed at their own publication; re-signing DEBs is not
+  # idempotent, so the same only-new rule is used for both families.
   echo "  Signing RPM packages..."
-  for rpm_file in "$dest"/*.rpm; do
-    [ -f "$rpm_file" ] || continue
+  for src_file in "$dir"/*.rpm; do
+    [ -f "$src_file" ] || continue
     rpmsign --define "%_gpg_name ${GPG_KEY}" \
             --define "%__gpg /usr/bin/gpg" \
             --define "%_gpg_digest_algo sha256" \
-            --addsign "$rpm_file"
+            --addsign "${dest}/$(basename "$src_file")"
   done
 
   createrepo_c --update "$dest"
@@ -101,20 +113,30 @@ for dir in "${ARTIFACTS_DIR}"/valkey-debs-*/; do
 
   echo "=== DEB repo: ${REPO_NAME}/${platform}/${arch} ==="
   mkdir -p "$dest"
+
+  # Hydrate existing packages before regenerating Packages/Release, for the
+  # same reason as the RPM loop above: apt only sees what the index lists.
+  aws s3 sync "s3://${S3_BUCKET}/packaging/${REPO_NAME}/deb/${platform}/${arch}/" "$dest/" \
+    --exclude "*" --include "*.deb" --region "$S3_REGION"
+
   cp "$dir"/*.deb "$dest/" 2>/dev/null || true
 
-  # Sign individual DEB packages
+  # Sign only this run's packages: debsigs is not idempotent, and hydrated
+  # packages carry the signature from their own publication.
   echo "  Signing DEB packages..."
-  for deb_file in "$dest"/*.deb; do
-    [ -f "$deb_file" ] || continue
-    debsigs --sign=origin --default-key="${GPG_KEY}" "$deb_file"
+  for src_file in "$dir"/*.deb; do
+    [ -f "$src_file" ] || continue
+    debsigs --sign=origin --default-key="${GPG_KEY}" "${dest}/$(basename "$src_file")"
   done
 
   cd "$dest"
   # dpkg-scanpackages writes Filename relative to the directory it scans, but
   # apt resolves Filename against the sources.list URI -- the platform
   # directory, one level up. Scan from there so the paths line up.
-  ( cd .. && dpkg-scanpackages --arch "$arch" "$arch" ) > Packages
+  # --multiversion is what makes hydration mean anything for apt: without
+  # it dpkg-scanpackages keeps only the newest version of each package and
+  # the index delists every earlier patch despite their files being present.
+  ( cd .. && dpkg-scanpackages --multiversion --arch "$arch" "$arch" ) > Packages
   gzip -9 -k -f Packages
 
   generate_release "$(pwd)" "$arch" > Release
