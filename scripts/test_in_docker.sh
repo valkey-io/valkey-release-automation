@@ -414,11 +414,9 @@ main() {
     [[ -d "$PKG_DIR" ]] || die "Package directory does not exist: $PKG_DIR"
     PKG_DIR="$(cd "$PKG_DIR" && pwd)"
 
-    # --no-docker mode: run directly on host
+    # --no-docker mode: run directly on host (exec replaces the process)
     if [[ "$NO_DOCKER" == true ]]; then
         run_test_no_docker
-        # exec replaces the process, so this is unreachable
-        exit $?
     fi
 
     # Validate target selection
