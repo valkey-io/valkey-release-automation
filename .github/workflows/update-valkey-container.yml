@@ -16,6 +16,10 @@ on:
         description: "Bashbrew output in JSON format"
         value: ${{ jobs.build-new-docker.outputs.bashbrew_json }}
 
+# GITHUB_TOKEN is read-only here; cross-repo writes use in-job App tokens.
+permissions:
+  contents: read
+
 jobs:
   build-new-docker:
     runs-on: ubuntu-latest

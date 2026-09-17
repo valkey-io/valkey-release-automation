@@ -2,6 +2,8 @@ import json
 import unittest
 from pathlib import Path
 
+import yaml
+
 WORKFLOWS = Path(".github/workflows")
 
 
@@ -248,3 +250,102 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPermissionMesh(unittest.TestCase):
+    """Every reusable-workflow call must satisfy GitHub's permission validator.
+
+    GitHub validates a called workflow's job `permissions:` blocks against the
+    CALLER JOB's effective permissions at run startup - including jobs whose
+    `if:` would skip them, and transitively through nested calls. A violation
+    is a startup_failure in production (this broke the 9.2.0-rc1 builds until
+    the callers granted the actions:read their approval jobs declared). This
+    test enforces the same subset rule statically so the break happens in CI.
+    """
+
+    _RANK = {"none": 0, "read": 1, "write": 2}
+    _SCOPES = [
+        "actions", "attestations", "checks", "contents", "deployments",
+        "discussions", "id-token", "issues", "packages", "pages",
+        "pull-requests", "repository-projects", "security-events", "statuses",
+    ]
+
+    @classmethod
+    def _norm(cls, perms):
+        if perms is None:
+            return None
+        if perms == "read-all":
+            return {s: "read" for s in cls._SCOPES}
+        if perms == "write-all":
+            return {s: "write" for s in cls._SCOPES}
+        return dict(perms or {})
+
+    @classmethod
+    def _load(cls):
+        workflows = {}
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            doc = yaml.safe_load(path.read_text())
+            wf_perms = cls._norm(doc.get("permissions"))
+            jobs = {}
+            for name, job in (doc.get("jobs") or {}).items():
+                own = cls._norm(job.get("permissions"))
+                jobs[name] = {
+                    "own": own,
+                    "effective": own if own is not None else wf_perms,
+                    "uses": job.get("uses"),
+                }
+            workflows[path.name] = {"wf_perms": wf_perms, "jobs": jobs}
+        return workflows
+
+    @classmethod
+    def _requirements(cls, workflows, wf_name, chain):
+        """Every permission request in wf_name and its nested local calls."""
+        reqs = []
+        wf = workflows[wf_name]
+        for jname, job in wf["jobs"].items():
+            label = f"{wf_name}:{jname}"
+            req = job["own"] if job["own"] is not None else wf["wf_perms"]
+            reqs.append((label, req or {}))
+            uses = job["uses"] or ""
+            if uses.startswith("./"):
+                nested = uses.rsplit("/", 1)[-1]
+                if nested in workflows and nested not in chain:
+                    reqs.extend(cls._requirements(workflows, nested, chain + [nested]))
+        return reqs
+
+    def test_every_local_call_satisfies_the_permission_validator(self) -> None:
+        workflows = self._load()
+        violations = []
+        edges = 0
+        for wname, wf in workflows.items():
+            for jname, job in wf["jobs"].items():
+                uses = job["uses"] or ""
+                if not uses.startswith("./"):
+                    continue
+                called = uses.rsplit("/", 1)[-1]
+                self.assertIn(called, workflows, f"{wname}:{jname} calls missing {called}")
+                edges += 1
+                cap = job["effective"] or {}
+                for label, req in self._requirements(workflows, called, [called]):
+                    for scope, level in req.items():
+                        have = cap.get(scope, "none")
+                        if self._RANK.get(have, 0) < self._RANK.get(level, 0):
+                            violations.append(
+                                f"{wname}:{jname} -> {label}: needs {scope}:{level}, "
+                                f"caller grants {scope}:{have} (startup_failure in prod)"
+                            )
+        self.assertGreater(edges, 0, "no call edges found; the mesh test is not testing anything")
+        self.assertEqual(violations, [])
+
+    def test_no_job_relies_on_the_implicit_repository_default(self) -> None:
+        # A job with neither its own nor a workflow-level permissions block
+        # gets whatever the repository settings say, which nobody reviews in
+        # a PR. Every job must resolve to an explicit, reviewed grant.
+        workflows = self._load()
+        implicit = [
+            f"{wname}:{jname}"
+            for wname, wf in workflows.items()
+            for jname, job in wf["jobs"].items()
+            if job["effective"] is None
+        ]
+        self.assertEqual(implicit, [])

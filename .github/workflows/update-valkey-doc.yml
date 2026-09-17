@@ -12,6 +12,10 @@ on:
         description: "GitHub login that approved the production release"
         required: true
 
+# GITHUB_TOKEN is read-only here; cross-repo writes use in-job App tokens.
+permissions:
+  contents: read
+
 jobs:
   update-valkey-doc:
     runs-on: ubuntu-latest

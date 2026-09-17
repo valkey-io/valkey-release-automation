@@ -21,6 +21,10 @@ on:
         required: false
         default: 'false'
 
+# GITHUB_TOKEN is read-only here; cross-repo writes use in-job App tokens.
+permissions:
+  contents: read
+
 jobs:
   update-website:
     runs-on: ubuntu-latest
