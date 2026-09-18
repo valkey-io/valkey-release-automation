@@ -524,9 +524,7 @@ packaging/N.M/debian/            # Version-specific overrides only
 │   ├── series
 │   ├── debian-packaging/
 │   │   └── 0001-Set-Debian-configuration-defaults.patch
-│   ├── 0001-Fix-FTBFS-on-kFreeBSD.patch
 │   ├── 0002-Add-CPPFLAGS-to-upstream-makefiles.patch
-│   ├── 0003-Use-get_current_dir_name-over-PATHMAX.patch
 │   └── 0004-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch
 └── valkey-conf.patch            # (if present)
 
@@ -843,20 +841,44 @@ Applied via `dpkg-source` with `--fuzz=0` (strict matching). The patch series is
 │     └─ Modifies valkey.conf + sentinel.conf for Debian paths       │
 │        (daemonize, pidfile, logfile, dir settings)                  │
 │                                                                    │
-│  2. 0001-Fix-FTBFS-on-kFreeBSD.patch                              │
-│     └─ Fixes __GLIBC__ / _XOPEN_SOURCE for BSD builds             │
-│                                                                    │
-│  3. 0002-Add-CPPFLAGS-to-upstream-makefiles.patch                 │
+│  2. 0002-Add-CPPFLAGS-to-upstream-makefiles.patch                 │
 │     └─ Propagates CPPFLAGS through src/Makefile and deps/Makefile  │
 │                                                                    │
-│  4. 0003-Use-get_current_dir_name-over-PATHMAX.patch              │
-│     └─ Removes PATH_MAX dependency (portability fix)               │
-│                                                                    │
-│  5. 0004-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch           │
+│  3. 0004-Add-support-for-USE_SYSTEM_JEMALLOC-flag.patch           │
 │     └─ Enables building against system jemalloc instead of bundled │
 │        (critical for Debian policy compliance)                     │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+> **Active defragmentation is unavailable in the DEB packages.** Upstream
+> gates `HAVE_DEFRAG` on the vendored jemalloc — `JEMALLOC_FRAG_HINT` on
+> 7.2/8.0, `VALKEY_VENDORED_JEMALLOC` (injected by
+> `deps/jemalloc/include/jemalloc/jemalloc.sh`) from 8.1 on. Because
+> `0004` links the distro's jemalloc, `activedefrag yes` is refused both at
+> startup and via `CONFIG SET`. The RPM packages do not carry this patch and
+> build the vendored jemalloc, so they keep defrag. Tracked upstream in
+> [valkey-io/valkey#1882](https://github.com/valkey-io/valkey/issues/1882);
+> the gate itself is deliberate (valkey-io/valkey#1985, after #1585).
+>
+> `0004` needs no C source changes: `jemalloc.h` strips the `je_` prefix
+> when the library is built without one, then `#undef`s the `je_*` names at
+> the end of the header unless `JEMALLOC_NO_DEMANGLE` is defined. The patch
+> defines it via `FINAL_CFLAGS`, which is why it is a single Makefile hunk.
+
+> **`0001-Fix-FTBFS-on-kFreeBSD.patch` was dropped** (all five versions).
+> It added `__GLIBC__` to the `_XOPEN_SOURCE 700` condition in
+> `src/fmacros.h`, but `__GLIBC__` is not compiler-predefined — it comes from
+> `<features.h>`, which `fmacros.h` includes only at its end and only under
+> `#ifdef __linux__`. At the line the patch edited, `__GLIBC__` is always
+> undefined, and on Linux `__linux__` already satisfies the condition. It
+> emitted no different code on any platform built here.
+
+> **`0003-Use-get_current_dir_name-over-PATHMAX.patch` was dropped** (all
+> five versions). It replaced a stack buffer in `rdbSave()` with a libc
+> allocation that was then released through Valkey's allocator, corrupting
+> `used_memory` accounting on the failure path; upstream declined it in
+> that form, and Debian dropped the equivalent from `src:redis`. The stock
+> `getcwd()` code has no such failure mode.
 
 ### Version-Specific Patch Differences
 
