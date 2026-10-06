@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # test_packages.sh — Automated test suite for Valkey packages
 #
-# Usage: bash scripts/test_packages.sh --pkg-dir=/path/to/debs_or_rpms [--version=X.Y.Z]
+# Usage: bash scripts/test_packages.sh --pkg-dir=/path/to/debs_rpms_or_apks [--version=X.Y.Z]
 #
 # Supports both upstream (valkey-*) and Percona (percona-valkey-*) packages.
-# Auto-detects OS (Debian vs RHEL), installs all packages from a directory,
-# runs validation tests, removes packages, and verifies clean removal.
+# Auto-detects OS (Debian, RHEL/SUSE or Alpine), installs all packages from a
+# directory, runs validation tests, removes packages, and verifies clean
+# removal. Service tests use systemd when it is PID 1, or OpenRC on Alpine
+# when the container has been prepared for it (see has_openrc).
 
 set -euo pipefail
 
@@ -16,7 +18,7 @@ PASS_COUNT=0
 FAIL_COUNT=0
 SKIP_COUNT=0
 PKG_DIR=""
-OS_FAMILY=""  # "deb" or "rpm"
+OS_FAMILY=""  # "deb", "rpm" or "apk"
 EXPECTED_VERSION=""
 START_TIME=""
 FAILED_TESTS=()
@@ -217,10 +219,52 @@ sentinel_service_name() {
 }
 
 ###############################################################################
+# OpenRC helpers (Alpine)
+###############################################################################
+# OpenRC services can be driven inside a container only after the container
+# has been prepared: an init that reaps zombies (docker run --init),
+# /run/openrc/softlevel, and rc_sys="docker" / rc_cgroup_mode="none" in
+# /etc/rc.conf. packages.yml and test_in_docker.sh do that.
+has_openrc() {
+    [[ -x /sbin/openrc-run && -f /run/openrc/softlevel ]]
+}
+
+# Records a SKIP and returns 1 when OpenRC is unavailable.
+require_openrc() {
+    if has_openrc; then
+        return 0
+    fi
+    skip "OpenRC not prepared - skipping $1"
+    return 1
+}
+
+# PID written by valkey-server itself, so it is the server, not the
+# supervise-daemon wrapper.
+server_pid() {
+    cat "${1:-/run/valkey/default.pid}" 2>/dev/null || true
+}
+
+# Waits until the server pidfile names a live process.
+wait_for_server_pid() {
+    local pidfile="$1" timeout="${2:-15}" elapsed=0 pid
+    while [[ $elapsed -lt $timeout ]]; do
+        pid="$(server_pid "$pidfile")"
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
+}
+
+###############################################################################
 # OS detection
 ###############################################################################
 detect_os() {
-    if [[ -f /etc/debian_version ]]; then
+    if [[ -f /etc/alpine-release ]]; then
+        OS_FAMILY="apk"
+    elif [[ -f /etc/debian_version ]]; then
         OS_FAMILY="deb"
     elif [[ -f /etc/redhat-release ]] || [[ -f /etc/centos-release ]] || [[ -f /etc/rocky-release ]] || [[ -f /etc/almalinux-release ]]; then
         OS_FAMILY="rpm"
@@ -231,7 +275,7 @@ detect_os() {
     elif command -v dpkg &>/dev/null && command -v apt-get &>/dev/null; then
         OS_FAMILY="deb"
     else
-        echo "ERROR: Cannot detect OS family (neither Debian nor RHEL based nor SUSE)" >&2
+        echo "ERROR: Cannot detect OS family (neither Debian nor RHEL based nor SUSE nor Alpine)" >&2
         exit 1
     fi
     echo "Detected OS family: $OS_FAMILY"
@@ -244,7 +288,7 @@ detect_pkg_prefix() {
     # Check what packages exist in the directory
     local has_percona=false has_upstream=false
 
-    for f in "$PKG_DIR"/*.deb "$PKG_DIR"/*.rpm; do
+    for f in "$PKG_DIR"/*.deb "$PKG_DIR"/*.rpm "$PKG_DIR"/*.apk; do
         [[ -f "$f" ]] || continue
         local base
         base="$(basename "$f")"
@@ -333,6 +377,30 @@ install_packages_rpm() {
     echo "Installation complete."
 }
 
+install_packages_apk() {
+    section_header "Installing .apk packages"
+
+    local apks=()
+    for f in "$PKG_DIR"/${PKG_PREFIX}*.apk; do
+        [[ -f "$f" ]] || continue
+        apks+=("$f")
+    done
+
+    if [[ ${#apks[@]} -eq 0 ]]; then
+        echo "ERROR: No ${PKG_PREFIX}*.apk files found in $PKG_DIR" >&2
+        exit 1
+    fi
+
+    # The packages carry the build job's throwaway signature; repository
+    # trust is exercised separately against a signed index.
+    echo "Installing ${#apks[@]} package(s)..."
+    apk add --allow-untrusted "${apks[@]}" 2>&1
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && INSTALLED_PKGS+=("$line")
+    done < <(apk info -v 2>/dev/null | grep "^${PKG_PREFIX}-" | sort)
+    echo "Installation complete."
+}
+
 remove_packages_deb() {
     section_header "Removing .deb packages"
     local pkgs
@@ -364,6 +432,20 @@ remove_packages_rpm() {
         else
             yum remove -y $pkgs 2>&1
         fi
+    else
+        echo "No ${PKG_PREFIX} packages found to remove."
+    fi
+    echo "Removal complete."
+}
+
+remove_packages_apk() {
+    section_header "Removing .apk packages"
+    local pkgs
+    pkgs="$(apk info 2>/dev/null | grep -E "^${PKG_PREFIX}(-|$)" || true)"
+    if [[ -n "$pkgs" ]]; then
+        echo "Removing: ${pkgs//$'\n'/ }"
+        # shellcheck disable=SC2086
+        apk del $pkgs 2>&1
     else
         echo "No ${PKG_PREFIX} packages found to remove."
     fi
@@ -453,6 +535,10 @@ test_directories() {
     assert_dir_exists /etc/valkey
     if [[ "$OS_FAMILY" == "deb" ]]; then
         assert_owner /etc/valkey "valkey:valkey"
+        assert_perms /etc/valkey 2770
+    elif [[ "$OS_FAMILY" == "apk" ]]; then
+        # Group-writable so Sentinel can save its config (see APKBUILD).
+        assert_owner /etc/valkey "root:valkey"
         assert_perms /etc/valkey 2770
     else
         assert_owner /etc/valkey "root:root"
@@ -1024,6 +1110,216 @@ test_valkey_sentinel_service() {
     fi
 }
 
+test_openrc_scripts() {
+    section_header "Test: OpenRC Scripts"
+    if [[ "$OS_FAMILY" != "apk" ]]; then
+        skip "OpenRC script tests (Alpine only)"
+        return
+    fi
+    assert_executable /etc/init.d/valkey "init.d/valkey"
+    assert_executable /etc/init.d/valkey-sentinel "init.d/valkey-sentinel"
+    assert_file_exists /etc/conf.d/valkey "conf.d/valkey"
+    assert_file_exists /etc/conf.d/valkey-sentinel "conf.d/valkey-sentinel"
+}
+
+test_openrc_enable_disable() {
+    section_header "Test: OpenRC Enable/Disable"
+    [[ "$OS_FAMILY" == "apk" ]] || return 0
+    require_openrc "enable/disable tests" || return 0
+
+    local svc
+    for svc in valkey valkey-sentinel; do
+        if rc-update add "$svc" default >/dev/null 2>&1 \
+            && rc-update show default 2>/dev/null | grep -qw "$svc"; then
+            pass "rc-update add $svc default"
+        else
+            fail "rc-update add $svc default"
+        fi
+        if rc-update del "$svc" default >/dev/null 2>&1 \
+            && ! rc-update show default 2>/dev/null | grep -qw "$svc"; then
+            pass "rc-update del $svc default"
+        else
+            fail "rc-update del $svc default"
+        fi
+    done
+}
+
+test_openrc_server() {
+    section_header "Test: Valkey Server Service (OpenRC)"
+    [[ "$OS_FAMILY" == "apk" ]] || return 0
+    require_openrc "server service tests" || return 0
+
+    if ! rc-service valkey start 2>&1; then
+        fail "rc-service valkey start"
+        tail -n 20 /var/log/valkey/default.log 2>/dev/null || true
+        return
+    fi
+    if wait_for_server_pid /run/valkey/default.pid 15; then
+        pass "valkey started (pidfile /run/valkey/default.pid)"
+    else
+        fail "valkey started (no live pid in /run/valkey/default.pid)"
+        tail -n 20 /var/log/valkey/default.log 2>/dev/null || true
+        return
+    fi
+
+    local result pid1 pid2 pid3
+    result="$(valkey-cli PING 2>&1)" || true
+    if [[ "$result" == "PONG" ]]; then
+        pass "valkey-cli PING → PONG"
+    else
+        fail "valkey-cli PING → PONG (got: $result)"
+    fi
+
+    valkey-cli SET __test_key__ "hello_valkey" >/dev/null 2>&1 || true
+    result="$(valkey-cli GET __test_key__ 2>&1)" || true
+    if [[ "$result" == "hello_valkey" ]]; then
+        pass "valkey-cli SET/GET functional"
+    else
+        fail "valkey-cli SET/GET functional (got: $result)"
+    fi
+
+    pid1="$(server_pid)"
+    result="$(stat -c %U "/proc/$pid1" 2>/dev/null)" || true
+    if [[ "$result" == "valkey" ]]; then
+        pass "valkey-server runs as valkey user"
+    else
+        fail "valkey-server runs as valkey user (got: '$result')"
+    fi
+
+    result="$(valkey-cli CONFIG GET dir 2>/dev/null | tail -n 1)" || true
+    if [[ "$result" == "/var/lib/valkey/default" ]]; then
+        pass "data dir is /var/lib/valkey/default"
+    else
+        fail "data dir is /var/lib/valkey/default (got: $result)"
+    fi
+    if valkey-cli SAVE >/dev/null 2>&1 && [[ -f /var/lib/valkey/default/dump.rdb ]]; then
+        pass "SAVE writes /var/lib/valkey/default/dump.rdb"
+    else
+        fail "SAVE writes /var/lib/valkey/default/dump.rdb"
+    fi
+    assert_file_exists /var/log/valkey/default.log "server log"
+
+    if rc-service valkey restart >/dev/null 2>&1 && sleep 1 && wait_for_server_pid /run/valkey/default.pid 15; then
+        pid2="$(server_pid)"
+        if [[ "$pid2" != "$pid1" ]]; then
+            pass "rc-service valkey restart (new PID $pid2)"
+        else
+            fail "rc-service valkey restart (PID unchanged: $pid2)"
+        fi
+    else
+        fail "rc-service valkey restart"
+    fi
+
+    # supervise-daemon brings the server back after a crash.
+    pid2="$(server_pid)"
+    kill -9 "$pid2" 2>/dev/null || true
+    sleep 4
+    pid3="$(server_pid)"
+    if [[ -n "$pid3" && "$pid3" != "$pid2" ]] && [[ "$(valkey-cli PING 2>&1)" == "PONG" ]]; then
+        pass "supervise-daemon respawned valkey-server after kill -9"
+    else
+        fail "supervise-daemon respawned valkey-server after kill -9"
+    fi
+
+    rc-service valkey stop >/dev/null 2>&1 || true
+    sleep 1
+    if ! rc-service valkey status >/dev/null 2>&1 && ! pgrep -f '^/usr/bin/valkey-server' >/dev/null 2>&1; then
+        pass "rc-service valkey stop"
+    else
+        fail "rc-service valkey stop (still running)"
+    fi
+}
+
+test_openrc_sentinel() {
+    section_header "Test: Valkey Sentinel Service (OpenRC)"
+    [[ "$OS_FAMILY" == "apk" ]] || return 0
+    require_openrc "sentinel service tests" || return 0
+
+    if ! rc-service valkey-sentinel start 2>&1 \
+        || ! wait_for_server_pid /run/valkey/sentinel-default.pid 15; then
+        fail "rc-service valkey-sentinel start"
+        tail -n 20 /var/log/valkey/sentinel-default.log 2>/dev/null || true
+        return
+    fi
+    pass "rc-service valkey-sentinel start"
+
+    local result
+    result="$(valkey-cli -p 26379 PING 2>&1)" || true
+    if [[ "$result" == "PONG" ]]; then
+        pass "valkey-cli -p 26379 PING → PONG"
+    else
+        fail "valkey-cli -p 26379 PING → PONG (got: $result)"
+    fi
+
+    # Sentinel saves by writing a temp file in /etc/valkey and renaming it.
+    if valkey-cli -p 26379 SENTINEL CONFIG SET resolve-hostnames yes >/dev/null 2>&1 \
+        && grep -q 'resolve-hostnames yes' /etc/valkey/sentinel-default.conf; then
+        pass "sentinel saves its config file"
+    else
+        fail "sentinel saves its config file"
+        tail -n 5 /var/log/valkey/sentinel-default.log 2>/dev/null || true
+    fi
+
+    rc-service valkey-sentinel stop >/dev/null 2>&1 || true
+    sleep 1
+    if ! pgrep -f '^/usr/bin/valkey-sentinel' >/dev/null 2>&1 \
+        && ! pgrep -f '^/usr/bin/valkey-server.*26379' >/dev/null 2>&1; then
+        pass "rc-service valkey-sentinel stop"
+    else
+        fail "rc-service valkey-sentinel stop (still running)"
+    fi
+}
+
+test_openrc_instances() {
+    section_header "Test: OpenRC Instances"
+    [[ "$OS_FAMILY" == "apk" ]] || return 0
+    require_openrc "instance tests" || return 0
+
+    # Extra instance: /etc/init.d/valkey.<name> -> /etc/valkey/<name>.conf
+    ln -sf valkey /etc/init.d/valkey.pkgtest
+    printf '%s\n' 'include /etc/valkey/includes/valkey.defaults.conf' 'port 6390' \
+        'dir /var/lib/valkey/pkgtest/' 'pidfile /run/valkey/pkgtest.pid' \
+        'logfile /var/log/valkey/pkgtest.log' > /etc/valkey/pkgtest.conf
+    if rc-service valkey.pkgtest start >/dev/null 2>&1 \
+        && [[ "$(valkey-cli -p 6390 PING 2>&1)" == "PONG" ]]; then
+        pass "instance valkey.pkgtest serves on port 6390"
+    else
+        fail "instance valkey.pkgtest serves on port 6390"
+    fi
+    assert_owner /var/lib/valkey/pkgtest "valkey:valkey" "instance data dir"
+
+    # A start that fails right away (port 6390 is taken) must be reported.
+    ln -sf valkey /etc/init.d/valkey.pkgtest-clash
+    sed -e 's/pkgtest/pkgtest-clash/g' /etc/valkey/pkgtest.conf > /etc/valkey/pkgtest-clash.conf
+    if ! rc-service valkey.pkgtest-clash start >/dev/null 2>&1 \
+        && ! rc-service valkey.pkgtest-clash status >/dev/null 2>&1; then
+        pass "failed start (port in use) is reported and left stopped"
+    else
+        fail "failed start (port in use) is reported and left stopped"
+        rc-service valkey.pkgtest-clash stop >/dev/null 2>&1 || true
+    fi
+    rc-service valkey.pkgtest stop >/dev/null 2>&1 || true
+
+    # Paths in an instance config (which the valkey group can rewrite) must
+    # not be acted on as root.
+    echo keep > /etc/valkey-pkgtest-marker
+    ln -sf valkey /etc/init.d/valkey.pkgtest-evil
+    printf '%s\n' 'include /etc/valkey/includes/valkey.defaults.conf' 'PORT 6391' \
+        'DIR /etc/valkey-pkgtest-pwned' 'PIDFILE /etc/valkey-pkgtest-marker' \
+        'logfile /var/log/valkey/pkgtest-evil.log' > /etc/valkey/pkgtest-evil.conf
+    rc-service valkey.pkgtest-evil start >/dev/null 2>&1 || true
+    rc-service valkey.pkgtest-evil stop >/dev/null 2>&1 || true
+    if [[ ! -e /etc/valkey-pkgtest-pwned && "$(cat /etc/valkey-pkgtest-marker 2>/dev/null)" == "keep" ]]; then
+        pass "config dir/pidfile paths are not created or deleted as root"
+    else
+        fail "config dir/pidfile paths are not created or deleted as root"
+    fi
+
+    rm -f /etc/init.d/valkey.pkgtest /etc/init.d/valkey.pkgtest-clash /etc/init.d/valkey.pkgtest-evil \
+        /etc/valkey/pkgtest*.conf /etc/valkey-pkgtest-marker
+    rm -rf /etc/valkey-pkgtest-pwned
+}
+
 test_compat_redis() {
     section_header "Test: Redis Compatibility"
 
@@ -1088,8 +1384,11 @@ test_clean_removal() {
     assert_file_not_exists /usr/include/valkeymodule.h "valkeymodule.h"
     assert_file_not_exists /usr/include/redismodule.h "redismodule.h"
 
-    # Systemd units should be gone
-    if [[ "$OS_FAMILY" == "deb" ]]; then
+    # Service definitions should be gone
+    if [[ "$OS_FAMILY" == "apk" ]]; then
+        assert_file_not_exists /etc/init.d/valkey "init.d/valkey"
+        assert_file_not_exists /etc/init.d/valkey-sentinel "init.d/valkey-sentinel"
+    elif [[ "$OS_FAMILY" == "deb" ]]; then
         assert_file_not_exists /lib/systemd/system/valkey-server.service "valkey-server.service"
         assert_file_not_exists /lib/systemd/system/valkey-sentinel.service "valkey-sentinel.service"
     else
@@ -1210,7 +1509,7 @@ main() {
                 echo "removes packages, and verifies clean removal."
                 echo ""
                 echo "Options:"
-                echo "  --pkg-dir=DIR       Directory containing .deb or .rpm packages"
+                echo "  --pkg-dir=DIR       Directory containing .deb, .rpm or .apk packages"
                 echo "  --version=X.Y.Z    Expected Valkey version (auto-detected if omitted)"
                 exit 0
                 ;;
@@ -1248,6 +1547,12 @@ main() {
         pkg_file="$(find "$PKG_DIR" -maxdepth 1 \( -name "${PKG_PREFIX}-server*" -o -name "${PKG_PREFIX}-server_*" \) \( -name '*.deb' -o -name '*.rpm' \) 2>/dev/null | head -1)"
         if [[ -n "$pkg_file" ]]; then
             EXPECTED_VERSION="$(basename "$pkg_file" | grep -oP '[\._-]\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        elif [[ "$OS_FAMILY" == "apk" ]]; then
+            # valkey-9.0.6-r0.apk (busybox grep has no -P)
+            pkg_file="$(find "$PKG_DIR" -maxdepth 1 -name "${PKG_PREFIX}-[0-9]*.apk" 2>/dev/null | head -1)"
+            if [[ -n "$pkg_file" ]]; then
+                EXPECTED_VERSION="$(basename "$pkg_file" | sed -n 's/^.*-\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\).*$/\1/p')"
+            fi
         fi
     fi
 
@@ -1256,7 +1561,9 @@ main() {
     fi
 
     # Install
-    if [[ "$OS_FAMILY" == "deb" ]]; then
+    if [[ "$OS_FAMILY" == "apk" ]]; then
+        install_packages_apk
+    elif [[ "$OS_FAMILY" == "deb" ]]; then
         install_packages_deb
     else
         install_packages_rpm
@@ -1279,6 +1586,11 @@ main() {
     test_systemd_restart_on_failure
     test_systemd_targets
     test_systemd_tmpfiles_sysctl
+    test_openrc_scripts
+    test_openrc_enable_disable
+    test_openrc_server
+    test_openrc_sentinel
+    test_openrc_instances
     test_compat_redis
     test_dev_headers
     test_logrotate
@@ -1287,12 +1599,18 @@ main() {
     if has_systemd; then
         systemctl stop "$(server_service_name)" "$(sentinel_service_name)" 2>/dev/null || true
         sleep 1
+    elif [[ "$OS_FAMILY" == "apk" ]] && has_openrc; then
+        rc-service valkey stop >/dev/null 2>&1 || true
+        rc-service valkey-sentinel stop >/dev/null 2>&1 || true
+        sleep 1
     fi
 
     set -e
 
     # Remove
-    if [[ "$OS_FAMILY" == "deb" ]]; then
+    if [[ "$OS_FAMILY" == "apk" ]]; then
+        remove_packages_apk
+    elif [[ "$OS_FAMILY" == "deb" ]]; then
         remove_packages_deb
     else
         remove_packages_rpm
