@@ -1,0 +1,20 @@
+# Settings for the valkey service. Copy to /etc/conf.d/valkey.<name> to
+# configure an extra instance (see /etc/init.d/valkey).
+
+# Instance configuration file (default: /etc/valkey/<instance>.conf).
+#cfgfile="/etc/valkey/default.conf"
+
+# Extra arguments for valkey-server.
+#command_args=""
+
+# User and group the server runs as.
+#command_user="valkey:valkey"
+
+# Process supervisor. supervise-daemon restarts the server if it dies.
+#supervisor="supervise-daemon"
+#respawn_delay=2
+#respawn_max=5
+#respawn_period=60
+
+# Resource limits (LimitNOFILE=10240 in the systemd unit).
+#rc_ulimit="-n 10240"

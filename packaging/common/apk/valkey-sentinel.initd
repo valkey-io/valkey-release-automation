@@ -1,0 +1,84 @@
+#!/sbin/openrc-run
+# Valkey Sentinel, one instance per service name (OpenRC counterpart of the
+# RPM/DEB valkey-sentinel@<instance> systemd template):
+#
+#   /etc/init.d/valkey-sentinel          instance "default" -> /etc/valkey/sentinel-default.conf
+#   /etc/init.d/valkey-sentinel.<name>   instance "<name>"  -> /etc/valkey/sentinel-<name>.conf
+#
+# Sentinel rewrites its configuration file at runtime, so the file must be
+# writable by the valkey group (mode 0660, as installed).
+
+instance="${RC_SVCNAME#valkey-sentinel}"
+instance="${instance#.}"
+: "${instance:=default}"
+
+name="Valkey Sentinel ($instance)"
+description="Valkey Sentinel, instance $instance"
+
+: "${cfgfile:=/etc/valkey/sentinel-${instance}.conf}"
+: "${command_user:=valkey:valkey}"
+: "${supervisor:=supervise-daemon}"
+: "${respawn_delay:=2}"
+: "${respawn_max:=5}"
+: "${respawn_period:=60}"
+: "${rc_ulimit:=-n 10240}"
+
+command="/usr/bin/valkey-sentinel"
+command_args="$cfgfile --daemonize no --supervised no $command_args"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+required_files="$cfgfile"
+
+depend() {
+	use net
+	use localmount logger
+	after firewall valkey
+}
+
+start_pre() {
+	# Root only handles this fixed path. Paths from the instance config are
+	# handled as the service user: /etc/valkey is writable by the valkey
+	# group, so a rewritten config must not be able to make root create,
+	# chown or delete files elsewhere.
+	checkpath -d -m 0755 -o "$command_user" /run/valkey || return 1
+
+	# Remove a stale pidfile, which would make start_post report success
+	# for a sentinel that never came up. Valkey creates its log file itself.
+	run_as_service_user 'if [ -n "$1" ]; then rm -f -- "$1"; fi; exit 0' \
+		"$(config_get pidfile)"
+}
+
+# supervise-daemon reports success as soon as it has spawned the process,
+# even if the server exits right away (bad config, port in use). The server
+# writes its pidfile before binding its ports, so wait for the pidfile and
+# then check that the process is still alive a moment later.
+start_post() {
+	local server_pidfile i=0
+	server_pidfile="$(config_get pidfile)"
+	[ -n "$server_pidfile" ] || return 0
+	while [ ! -s "$server_pidfile" ] && [ "$i" -lt 50 ]; do
+		i=$((i + 1))
+		sleep 0.1
+	done
+	sleep 1
+	if ! kill -0 "$(cat "$server_pidfile" 2>/dev/null)" 2>/dev/null; then
+		eerror "$name did not start; check $(config_get logfile)"
+		supervise-daemon "$RC_SVCNAME" --stop --pidfile "$pidfile" >/dev/null 2>&1
+		return 1
+	fi
+}
+
+# Run a shell snippet as the service user; extra arguments become $1, $2, ...
+run_as_service_user() {
+	local script="$1"
+	shift
+	su -s /bin/sh "${command_user%%:*}" -c "$script" -- sh "$@"
+}
+
+# Last value of a directive in the instance config, quotes stripped.
+# Directive names are case-insensitive, as in valkey-server. Values that
+# contain spaces and directives that only appear in an include are not
+# supported.
+config_get() {
+	awk -v key="$1" 'tolower($1) == key { v = $2 } END { gsub(/["\047]/, "", v); print v }' "$cfgfile"
+}
