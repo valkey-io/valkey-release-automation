@@ -2,16 +2,17 @@
 # Generate version-specific packaging files from templates.
 #
 # Usage:
-#   generate-from-templates.sh --type rpm|deb --version <VALKEY_VERSION> \
+#   generate-from-templates.sh --type rpm|deb|apk --version <VALKEY_VERSION> \
 #     --templates-dir <path> --output-dir <path> \
 #     [--override-templates-dir <path>]
 #
 # --override-templates-dir is optional. When set, the renderer looks there
 # first for each template file (control.template, rules.template,
-# valkey.spec.template, changelog-<MAJOR>.<MINOR>) and falls back to
-# --templates-dir if the file isn't present in the override dir. This lets a
-# single version ship a tweaked template under packaging/<version>/<type>/
-# without duplicating the shared templates used by every other version.
+# valkey.spec.template, APKBUILD.template, changelog-<MAJOR>.<MINOR>) and
+# falls back to --templates-dir if the file isn't present in the override
+# dir. This lets a single version ship a tweaked template under
+# packaging/<version>/<type>/ without duplicating the shared templates used
+# by every other version.
 
 set -e
 
@@ -33,7 +34,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ -z "$TYPE" ] || [ -z "$VERSION" ] || [ -z "$TEMPLATES_DIR" ] || [ -z "$OUTPUT_DIR" ]; then
-  echo "Usage: $0 --type rpm|deb --version <VERSION> --templates-dir <DIR> --output-dir <DIR> [--override-templates-dir <DIR>]" >&2
+  echo "Usage: $0 --type rpm|deb|apk --version <VERSION> --templates-dir <DIR> --output-dir <DIR> [--override-templates-dir <DIR>]" >&2
   exit 1
 fi
 
@@ -68,6 +69,17 @@ if [ "$MAJOR_VERSION" -gt 8 ] || { [ "$MAJOR_VERSION" -eq 8 ] && [ "$MINOR" -ge 
   EXTRA_BUILD_FLAGS=" USE_FAST_FLOAT=yes"
 fi
 
+# Bundled client library: hiredis before 9.0, libvalkey from 9.0 on.
+if [ "$MAJOR_VERSION" -ge 9 ]; then
+  BUNDLED_DEP_NAME="libvalkey"
+  BUNDLED_DEP_PROVIDES="Provides:       bundled(libvalkey) = 1.0.0"
+  BUNDLED_DEP_DIR="libvalkey"
+else
+  BUNDLED_DEP_NAME="hiredis"
+  BUNDLED_DEP_PROVIDES="Provides:       bundled(hiredis)"
+  BUNDLED_DEP_DIR="hiredis"
+fi
+
 echo "Generating ${TYPE} files for Valkey ${VERSION} (major=${MAJOR_VERSION}, doc=${DOC_VERSION})"
 
 if [ "$TYPE" = "deb" ]; then
@@ -91,17 +103,6 @@ if [ "$TYPE" = "deb" ]; then
   fi
 
 elif [ "$TYPE" = "rpm" ]; then
-  # Determine bundled dependency based on major version
-  if [ "$MAJOR_VERSION" -ge 9 ]; then
-    BUNDLED_DEP_NAME="libvalkey"
-    BUNDLED_DEP_PROVIDES="Provides:       bundled(libvalkey) = 1.0.0"
-    BUNDLED_DEP_DIR="libvalkey"
-  else
-    BUNDLED_DEP_NAME="hiredis"
-    BUNDLED_DEP_PROVIDES="Provides:       bundled(hiredis)"
-    BUNDLED_DEP_DIR="hiredis"
-  fi
-
   # Load changelog (override dir wins if it ships its own fragment)
   CHANGELOG_FILE="$(resolve_template "changelog-${MAJOR_VERSION}.${MINOR}")"
   if [ -f "$CHANGELOG_FILE" ]; then
@@ -148,8 +149,46 @@ elif [ "$TYPE" = "rpm" ]; then
     echo "  Generated: valkey.spec (from $spec_tpl)"
   fi
 
+elif [ "$TYPE" = "apk" ]; then
+  # The values below end up in a shell script (the APKBUILD) that abuild
+  # sources as root, so only accept release-formatted versions.
+  if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+    echo "ERROR: invalid version '${VERSION}' (expected x.y.z or x.y.z-rcN)" >&2
+    exit 1
+  fi
+  # Alpine orders x.y.z_rcN before x.y.z; the upstream tarball keeps -rcN.
+  PKGVER="${VERSION/-rc/_rc}"
+  APK_BUILD_FLAGS="${EXTRA_BUILD_FLAGS}"
+  APK_MAKEDEPENDS=""
+  # Zstandard streaming compression (9.2+) links libzstd statically.
+  if [ "$MAJOR_VERSION" -gt 9 ] || { [ "$MAJOR_VERSION" -eq 9 ] && [ "$MINOR" -ge 2 ]; }; then
+    APK_BUILD_FLAGS="${APK_BUILD_FLAGS} BUILD_ZSTD=yes"
+    APK_MAKEDEPENDS=" zstd-dev zstd-static"
+  fi
+
+  apkbuild_tpl="$(resolve_template APKBUILD.template)"
+  if [ ! -f "$apkbuild_tpl" ]; then
+    echo "ERROR: APKBUILD template not found at ${apkbuild_tpl}" >&2
+    exit 1
+  fi
+  sed \
+    -e "s/@@PKGVER@@/${PKGVER}/g" \
+    -e "s/@@SRCVER@@/${VERSION}/g" \
+    -e "s/@@DOC_VERSION@@/${DOC_VERSION}/g" \
+    -e "s/@@BUNDLED_DEP_NAME@@/${BUNDLED_DEP_NAME}/g" \
+    -e "s/@@BUNDLED_DEP_DIR@@/${BUNDLED_DEP_DIR}/g" \
+    -e "s/@@EXTRA_BUILD_FLAGS@@/${APK_BUILD_FLAGS}/g" \
+    -e "s/@@EXTRA_MAKEDEPENDS@@/${APK_MAKEDEPENDS}/g" \
+    "$apkbuild_tpl" > "${OUTPUT_DIR}/APKBUILD"
+  if grep -q '@@[A-Z_]*@@' "${OUTPUT_DIR}/APKBUILD"; then
+    echo "ERROR: unresolved placeholders in APKBUILD:" >&2
+    grep -n '@@[A-Z_]*@@' "${OUTPUT_DIR}/APKBUILD" >&2
+    exit 1
+  fi
+  echo "  Generated: APKBUILD (from $apkbuild_tpl)"
+
 else
-  echo "ERROR: Unknown type '${TYPE}'. Use 'rpm' or 'deb'." >&2
+  echo "ERROR: Unknown type '${TYPE}'. Use 'rpm', 'deb' or 'apk'." >&2
   exit 1
 fi
 
