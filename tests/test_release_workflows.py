@@ -65,13 +65,14 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("SOURCE_SHA: ${{ inputs.source_sha }}", packages)
         self.assertIn('SOURCE_SHA="$TAG_SHA"', packages)
         self.assertIn("source_sha: ${{ steps.derive.outputs.source_sha }}", packages)
+        # One per package build family: RPM, DEB and APK.
         self.assertEqual(
             packages.count("SOURCE_SHA: ${{ needs.process-inputs.outputs.source_sha }}"),
-            2,
+            3,
         )
         self.assertEqual(
             packages.count("          SHA: ${{ needs.process-inputs.outputs.source_sha }}"),
-            2,
+            3,
         )
 
     def test_candidate_code_never_shares_a_job_with_oidc(self) -> None:
@@ -96,6 +97,24 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         )
         self.assertIn("id-token: write", try_publish)
         self.assertNotIn("Build Try Valkey image", try_publish)
+
+    def test_apk_build_and_test_never_hold_credentials(self) -> None:
+        # Packages are signed with a throwaway key in build-apk; only the
+        # publish job may ever see the repository signing key or AWS.
+        jobs = yaml.safe_load(workflow("packages.yml"))["jobs"]
+        for name in ("build-apk", "test-apk"):
+            job = jobs[name]
+            text = yaml.safe_dump(job)
+            self.assertEqual(job["permissions"], {"contents": "read"}, name)
+            self.assertNotIn("secrets.", text, name)
+            self.assertNotIn("id-token", text, name)
+            checkouts = [s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout@")]
+            self.assertTrue(checkouts, name)
+            for step in checkouts:
+                self.assertIs(step["with"]["persist-credentials"], False, name)
+        # A failed APK build or test must block publication like RPM/DEB.
+        self.assertIn("build-apk", jobs["publish-to-s3"]["needs"])
+        self.assertIn("test-apk", jobs["publish-to-s3"]["needs"])
 
     def test_hash_and_website_commits_are_signed_off(self) -> None:
         hashes = workflow("update-valkey-hashes.yml")

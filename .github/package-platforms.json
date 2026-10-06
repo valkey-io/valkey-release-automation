@@ -26,5 +26,13 @@
       { "name": "Ubuntu 22.04 (Jammy)", "container": "ubuntu:22.04", "id": "ubuntu2204", "codename": "jammy" },
       { "name": "Ubuntu 24.04 (Noble)", "container": "ubuntu:24.04", "id": "ubuntu2404", "codename": "noble" }
     ]
+  },
+  "apk": {
+    "arch": ["x86_64", "aarch64"],
+    "platform": [
+      { "name": "Alpine 3.22", "container": "alpine:3.22", "id": "alpine3.22", "branch": "v3.22" },
+      { "name": "Alpine 3.23", "container": "alpine:3.23", "id": "alpine3.23", "branch": "v3.23" },
+      { "name": "Alpine 3.24", "container": "alpine:3.24", "id": "alpine3.24", "branch": "v3.24" }
+    ]
   }
 }
