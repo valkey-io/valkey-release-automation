@@ -93,12 +93,18 @@ build() {
 	export CFLAGS="$(printf '%s' "$CFLAGS" | sed 's/-Os/-O2/')"
 	make $_build_flags
 
-	# A Makefile that does not know BUILD_ZSTD ignores it silently
-	# (e.g. the 9.2.0-rc1 tag), so check that the feature was compiled in.
+	# A Makefile that does not know BUILD_ZSTD ignores it silently, so
+	# check that the feature was compiled in. Releases must have it; a
+	# release candidate cut before zstd landed (9.2.0-rc1) only warns,
+	# matching the RPM/DEB builds of the same tag.
 	case "$_build_flags" in
 	*BUILD_ZSTD=yes*)
-		grep -q -- '-DHAVE_ZSTD' src/.make-settings \
-			|| die "BUILD_ZSTD=yes was requested but zstd support was not compiled in"
+		if ! grep -q -- '-DHAVE_ZSTD' src/.make-settings; then
+			case "$pkgver" in
+			*_rc*) warning "BUILD_ZSTD=yes was ignored: $_srcver predates zstd support" ;;
+			*) die "BUILD_ZSTD=yes was requested but zstd support was not compiled in" ;;
+			esac
+		fi
 		;;
 	esac
 
