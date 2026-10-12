@@ -53,6 +53,7 @@ on:
       - 'scripts/build-apk.sh'
       - 'scripts/setup_openrc_container.sh'
       - 'scripts/test_apk_repo.sh'
+      - 'scripts/sign-apk.sh'
       - 'scripts/publish-to-s3.sh'
       - 'scripts/publish-repos.sh'
       - 'scripts/generate-from-templates.sh'
@@ -973,6 +974,21 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ secrets.S3_REGION }}
 
+      # The APK repository key goes to a 0600 file that only the signing
+      # container mounts (read-only, without network); it is never passed
+      # to a container as an environment variable. publish-to-s3.sh fails if
+      # APK publishing is enabled and the key is missing or does not match
+      # the committed public key.
+      - name: Write APK signing key
+        env:
+          APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
+        run: |
+          if [ -n "$APK_PRIVATE_KEY" ]; then
+            key_file="${RUNNER_TEMP}/apk-signing-key.rsa"
+            (umask 077 && printf '%s\n' "$APK_PRIVATE_KEY" > "$key_file")
+            echo "APK_KEY_FILE=${key_file}" >> "$GITHUB_ENV"
+          fi
+
       - name: Sign packages and upload to S3
         env:
           VERSION: ${{ needs.process-inputs.outputs.version }}
@@ -985,7 +1001,12 @@ jobs:
             "$GPG_FINGERPRINT" \
             artifacts \
             "$S3_BUCKET" \
-            "$S3_REGION"
+            "$S3_REGION" \
+            "${APK_KEY_FILE:-}"
+
+      - name: Remove APK signing key
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/apk-signing-key.rsa"
 
   ############################################################################
   # Deploy Install Instructions to GitHub Pages

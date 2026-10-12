@@ -5,11 +5,12 @@
 #
 # Usage: test_apk_repo.sh <dir-with-apks> <expected-pkgver>
 #
-# The index is signed with a throwaway key here, as the publish job signs it
-# with the real one. The checks cover what users depend on: an untrusted
-# index is refused, the tagged install resolves to these packages and not
-# to Alpine's own valkey, and a package that does not match the signed
-# index is rejected.
+# The packages and index are signed with a test key by sign-apk.sh, as the
+# publish job signs them with the release key. The checks cover what users
+# depend on: an untrusted index is refused, the tagged install resolves to
+# these packages and not to Alpine's own valkey, a re-signed package
+# verifies on its own, and a package that does not match the signed index
+# is rejected.
 set -eu
 
 PKG_SRC="$1"
@@ -21,20 +22,19 @@ FAILURES=0
 ok() { echo "  PASS $*"; }
 bad() { echo "  FAIL $*"; FAILURES=$((FAILURES + 1)); }
 
-apk add --no-cache abuild >/dev/null
+apk add --no-cache abuild python3 >/dev/null
 
 echo "=== Build a signed repository from the packages ==="
-mkdir -p "$REPO/$ARCH"
+# Sign with a test key through sign-apk.sh, as the publish job signs with
+# the release key: re-sign every package, index, sign the index.
+KEY_DIR=/tmp/valkey-test-key
+mkdir -p "$KEY_DIR" "$REPO/$ARCH"
+openssl genrsa -out "$KEY_DIR/private.rsa" 2048 2>/dev/null
+openssl rsa -in "$KEY_DIR/private.rsa" -pubout -out "$KEY_DIR/valkey-test.rsa.pub" 2>/dev/null
 cp "$PKG_SRC"/*.apk "$REPO/$ARCH"/
-cd "$REPO/$ARCH"
-# --rewrite-arch: apk downloads a package from <repo>/<arch in the index>/,
-# so noarch subpackages (-doc, -openrc, compat-redis*) must be indexed under
-# this directory's arch, as abuild does for its own repositories.
-apk index --allow-untrusted --rewrite-arch "$ARCH" -o APKINDEX.tar.gz -d "valkey test repo" ./*.apk
-openssl genrsa -out /tmp/valkey-test.rsa 2048 2>/dev/null
-openssl rsa -in /tmp/valkey-test.rsa -pubout -out /tmp/valkey-test.rsa.pub 2>/dev/null
-abuild-sign -k /tmp/valkey-test.rsa -p valkey-test.rsa.pub APKINDEX.tar.gz
-cd /
+# shellcheck disable=SC2046
+APK_KEY_DIR="$KEY_DIR" sh "$(dirname "$0")/sign-apk.sh" all "$REPO/$ARCH" "$ARCH" "${EXPECTED%-r*}" \
+  valkey-test.rsa.pub "valkey test repo" $(cd "$REPO/$ARCH" && ls -- *.apk)
 
 echo "@valkey $REPO" >> /etc/apk/repositories
 
@@ -48,7 +48,7 @@ else
 fi
 
 echo "=== Trusted repository installs every tagged package ==="
-cp /tmp/valkey-test.rsa.pub /etc/apk/keys/valkey-test.rsa.pub
+cp "$KEY_DIR/valkey-test.rsa.pub" /etc/apk/keys/valkey-test.rsa.pub
 apk update >/dev/null
 # Every package this build produced, e.g. valkey valkey-dev valkey-openrc.
 PKGS="$(for f in "$REPO/$ARCH"/*.apk; do
@@ -74,11 +74,23 @@ else
   bad "valkey-compat-redis installed from the tagged repository"
 fi
 
+echo "=== Re-signed packages verify and install outside the repository ==="
+MAIN="$(find "$REPO/$ARCH" -name "valkey-${EXPECTED}.apk")"
+if apk verify "$MAIN" >/dev/null 2>&1; then
+  ok "apk verify $(basename "$MAIN")"
+else
+  bad "apk verify $(basename "$MAIN")"
+fi
+if tar -tzf "$MAIN" 2>/dev/null | grep -qx '.SIGN.RSA256.valkey-test.rsa.pub'; then
+  ok "package carries an RSA256 signature by the repository key"
+else
+  bad "package carries an RSA256 signature by the repository key"
+fi
+
 echo "=== A package that does not match the signed index is rejected ==="
 # shellcheck disable=SC2046
 apk del $(echo "$PKGS" | sed 's/@valkey//g') >/dev/null 2>&1
 apk cache clean >/dev/null 2>&1 || true
-MAIN="$(find "$REPO/$ARCH" -name "valkey-${EXPECTED}.apk")"
 cp "$MAIN" /tmp/main.apk.orig
 # Append a byte: same name and version, different checksum.
 printf 'x' >> "$MAIN"
