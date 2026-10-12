@@ -154,22 +154,46 @@ echo "::group::Download Valkey documentation"
 DOC_VERSION="${DOC_VERSION:-$(sed -n 's/^_docver=//p' APKBUILD)}"
 sed -i "s/^_docver=.*/_docver=${DOC_VERSION}/" APKBUILD
 WITH_DOCS=1
+# valkey-doc release to try after DOC_VERSION (MAJOR.MINOR.0) is missing:
+# the previous minor line, as the DEB build does for 9.2 -> 9.1.0.
+doc_fallback() {
+  _major="${1%%.*}"
+  _rest="${1#*.}"
+  _minor="${_rest%%.*}"
+  if [ "$_minor" -gt 0 ]; then
+    echo "${_major}.$((_minor - 1)).0"
+  fi
+}
 if [ -z "$(apk search -x pandoc-cli)" ]; then
   echo "pandoc-cli is not available on this platform; building without valkey-doc"
   WITH_DOCS=0
 else
   # Only a missing tag (HTTP error, wget exit 8) means "no docs yet"; a
   # transport failure must not silently ship a release without valkey-doc.
-  rc=0
-  fetch "https://github.com/valkey-io/valkey-doc/archive/${DOC_VERSION}/valkey-doc-${DOC_VERSION}.tar.gz" \
-    "valkey-doc-${DOC_VERSION}.tar.gz" || rc=$?
-  if [ "$rc" -eq 8 ]; then
-    echo "valkey-doc ${DOC_VERSION} is not published yet; building without valkey-doc"
-    rm -f "valkey-doc-${DOC_VERSION}.tar.gz"
-    WITH_DOCS=0
-  elif [ "$rc" -ne 0 ]; then
-    echo "ERROR: downloading valkey-doc ${DOC_VERSION} failed (wget exit ${rc})" >&2
-    exit 1
+  WITH_DOCS=0
+  for candidate in "$DOC_VERSION" "$(doc_fallback "$DOC_VERSION")"; do
+    [ -n "$candidate" ] || continue
+    rc=0
+    fetch "https://github.com/valkey-io/valkey-doc/archive/${candidate}/valkey-doc-${candidate}.tar.gz" \
+      "valkey-doc-${candidate}.tar.gz" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      if [ "$candidate" != "$DOC_VERSION" ]; then
+        echo "valkey-doc ${DOC_VERSION} is not published yet; using valkey-doc ${candidate}"
+        DOC_VERSION="$candidate"
+        sed -i "s/^_docver=.*/_docver=${DOC_VERSION}/" APKBUILD
+      fi
+      WITH_DOCS=1
+      break
+    elif [ "$rc" -eq 8 ]; then
+      echo "valkey-doc ${candidate} is not published"
+      rm -f "valkey-doc-${candidate}.tar.gz"
+    else
+      echo "ERROR: downloading valkey-doc ${candidate} failed (wget exit ${rc})" >&2
+      exit 1
+    fi
+  done
+  if [ "$WITH_DOCS" -eq 0 ]; then
+    echo "No valkey-doc release found; building without valkey-doc"
   fi
 fi
 sed -i "s/^_with_docs=.*/_with_docs=${WITH_DOCS}/" APKBUILD
