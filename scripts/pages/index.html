@@ -289,22 +289,25 @@
               <option value="amzn2023">Amazon Linux 2023</option>
             </optgroup>
             <optgroup label="Fedora">
-              <option value="fedora39">Fedora 39</option>
-              <option value="fedora40">Fedora 40</option>
-              <option value="fedora41">Fedora 41</option>
+              <option value="fedora43">Fedora 43</option>
+              <option value="fedora44">Fedora 44</option>
             </optgroup>
             <optgroup label="openSUSE">
               <option value="opensuse-15.5">openSUSE Leap 15.5</option>
               <option value="opensuse-15.6">openSUSE Leap 15.6</option>
             </optgroup>
             <optgroup label="Debian">
-              <option value="debian11">Debian 11 (Bullseye)</option>
               <option value="debian12">Debian 12 (Bookworm)</option>
               <option value="debian13">Debian 13 (Trixie)</option>
             </optgroup>
             <optgroup label="Ubuntu">
               <option value="ubuntu2204">Ubuntu 22.04 (Jammy)</option>
               <option value="ubuntu2404">Ubuntu 24.04 (Noble)</option>
+            </optgroup>
+            <optgroup label="Alpine Linux" id="alpine-options">
+              <option value="alpine3.22">Alpine Linux 3.22</option>
+              <option value="alpine3.23">Alpine Linux 3.23</option>
+              <option value="alpine3.24">Alpine Linux 3.24</option>
             </optgroup>
           </select>
         </div>
@@ -379,10 +382,39 @@
       </div>
     </div>
 
+    <div id="apk-instructions" class="instructions">
+      <h2>Install Valkey <span class="ver-name"></span> on <span class="os-name"></span></h2>
+      <p>Run these commands as root (or prefix them with <code>doas</code>).</p>
+      <div class="step">
+        <div class="step-header"><span class="step-num">1</span><span class="step-title">Add the signing key</span></div>
+        <pre id="apk-step1"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">2</span><span class="step-title">Add the Valkey repository</span></div>
+        <pre id="apk-step2"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">3</span><span class="step-title">Install Valkey</span></div>
+        <pre id="apk-step3"></pre>
+      </div>
+      <div class="step">
+        <div class="step-header"><span class="step-num">4</span><span class="step-title">Start Valkey</span></div>
+        <pre id="apk-step4"></pre>
+      </div>
+    </div>
+
+    <div id="apk-unavailable" class="instructions">
+      <p>Alpine Linux packages are not available for Valkey <span class="ver-name"></span>.</p>
+    </div>
+
     <div class="section">
       <h2>GPG Key</h2>
       <p>All packages are signed with our GPG key. Download the public key:
       <a href="GPG-KEY-valkey.asc">GPG-KEY-valkey.asc</a></p>
+      <p id="apk-key-note">Alpine Linux packages are signed with an RSA key:
+      <a href="valkey-packages.rsa.pub">valkey-packages.rsa.pub</a>.
+      Its SHA-256 fingerprint is <code>%%APK_KEY_FINGERPRINT%%</code>; check it with
+      <code>openssl pkey -pubin -in /etc/apk/keys/valkey-packages.rsa.pub -outform DER | sha256sum</code>.</p>
     </div>
 
     <footer>
@@ -394,6 +426,13 @@
   var PAGES_URL = "%%PAGES_URL%%";   // GitHub Pages (for GPG key link on the page)
   var REPO_URL = "%%REPO_URL%%";     // S3 (for actual repo baseurl/deb lines)
   var AVAILABLE_VERSIONS = "%%VERSIONS%%";
+  var APK_ENABLED = "%%APK_ENABLED%%" === "true";
+  var APK_VERSIONS = "%%APK_VERSIONS%%".split(",").filter(Boolean);
+
+  if (!APK_ENABLED) {
+    document.getElementById("alpine-options").remove();
+    document.getElementById("apk-key-note").remove();
+  }
 
   (function populateVersions() {
     var sel = document.getElementById("version-select");
@@ -422,16 +461,17 @@
     alma9:     { name: "AlmaLinux 9", type: "rpm", pkg: "dnf" },
     alma10:    { name: "AlmaLinux 10", type: "rpm", pkg: "dnf" },
     amzn2023:  { name: "Amazon Linux 2023", type: "rpm", pkg: "dnf" },
-    fedora39:  { name: "Fedora 39", type: "rpm", pkg: "dnf" },
-    fedora40:  { name: "Fedora 40", type: "rpm", pkg: "dnf" },
-    fedora41:  { name: "Fedora 41", type: "rpm", pkg: "dnf" },
+    fedora43:  { name: "Fedora 43", type: "rpm", pkg: "dnf" },
+    fedora44:  { name: "Fedora 44", type: "rpm", pkg: "dnf" },
     "opensuse-15.5": { name: "openSUSE Leap 15.5", type: "suse", pkg: "zypper" },
     "opensuse-15.6": { name: "openSUSE Leap 15.6", type: "suse", pkg: "zypper" },
-    debian11:  { name: "Debian 11 (Bullseye)", type: "deb" },
     debian12:  { name: "Debian 12 (Bookworm)", type: "deb" },
     debian13:  { name: "Debian 13 (Trixie)", type: "deb" },
     ubuntu2204:{ name: "Ubuntu 22.04 (Jammy)", type: "deb" },
-    ubuntu2404:{ name: "Ubuntu 24.04 (Noble)", type: "deb" }
+    ubuntu2404:{ name: "Ubuntu 24.04 (Noble)", type: "deb" },
+    "alpine3.22": { name: "Alpine Linux 3.22", type: "apk", branch: "v3.22" },
+    "alpine3.23": { name: "Alpine Linux 3.23", type: "apk", branch: "v3.23" },
+    "alpine3.24": { name: "Alpine Linux 3.24", type: "apk", branch: "v3.24" }
   };
 
   function showInstructions() {
@@ -501,6 +541,22 @@
         "sudo apt-get update\nsudo apt-get install -y valkey-server";
       document.getElementById("deb-step5").textContent =
         "sudo systemctl enable --now valkey-server";
+
+    } else if (d.type === "apk" && APK_VERSIONS.indexOf(ver) < 0) {
+      document.getElementById("apk-unavailable").classList.add("active");
+
+    } else if (d.type === "apk") {
+      document.getElementById("apk-instructions").classList.add("active");
+      document.getElementById("apk-step1").textContent =
+        "wget -O /etc/apk/keys/valkey-packages.rsa.pub " + REPO_URL + "/valkey-packages.rsa.pub";
+      // The @valkey tag keeps Alpine's own valkey package from being replaced
+      // unless it is asked for explicitly.
+      document.getElementById("apk-step2").textContent =
+        "echo \"@valkey " + repoBase + "/apk/" + d.branch + "\" >> /etc/apk/repositories";
+      document.getElementById("apk-step3").textContent =
+        "apk update\napk add valkey@valkey valkey-openrc@valkey";
+      document.getElementById("apk-step4").textContent =
+        "rc-update add valkey\nrc-service valkey start";
     }
 
     addCopyButtons();

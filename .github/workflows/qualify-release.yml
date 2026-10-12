@@ -235,6 +235,7 @@ jobs:
           X86_MATRIX: ${{ needs.generate-build-matrix.outputs.x86-matrix }}
           ARM_MATRIX: ${{ needs.generate-build-matrix.outputs.arm-matrix }}
           PACKAGES_RESULT: ${{ needs.qualify-packages.result }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           X86_COUNT=$(jq '.distro | length' <<< "$X86_MATRIX")
@@ -249,16 +250,29 @@ jobs:
             # Release candidates skip the package matrix by design.
             RPM_JOBS=0
             DEB_JOBS=0
+            APK_JOBS=0
           else
             RPM_JOBS=$(jq '(.rpm.arch | length) * (.rpm.platform | length)' .github/package-platforms.json)
             DEB_JOBS=$(jq '(.deb.arch | length) * (.deb.platform | length)' .github/package-platforms.json)
-            if [[ "$RPM_JOBS" -ne 30 || "$DEB_JOBS" -ne 10 ]]; then
-              echo "Incomplete package matrix: expected rpm=30 and deb=10, got rpm=$RPM_JOBS deb=$DEB_JOBS."
+            if [[ "$RPM_JOBS" -ne 28 || "$DEB_JOBS" -ne 8 ]]; then
+              echo "Incomplete package matrix: expected rpm=28 and deb=8, got rpm=$RPM_JOBS deb=$DEB_JOBS."
               exit 1
+            fi
+            # APK packaging starts at Valkey 8.0; packages.yml builds no APKs
+            # for 7.2.
+            if [[ "${VERSION%%.*}" -lt 8 ]]; then
+              APK_JOBS=0
+            else
+              APK_JOBS=$(jq '(.apk.arch | length) * (.apk.platform | length)' .github/package-platforms.json)
+              if [[ "$APK_JOBS" -ne 6 ]]; then
+                echo "Incomplete package matrix: expected apk=6, got apk=$APK_JOBS."
+                exit 1
+              fi
             fi
           fi
 
           echo "archive_jobs=$ARCHIVE_JOBS" >> "$GITHUB_OUTPUT"
           echo "rpm_jobs=$RPM_JOBS" >> "$GITHUB_OUTPUT"
           echo "deb_jobs=$DEB_JOBS" >> "$GITHUB_OUTPUT"
-          echo "Job counts: archives=$ARCHIVE_JOBS rpm=$RPM_JOBS deb=$DEB_JOBS"
+          echo "apk_jobs=$APK_JOBS" >> "$GITHUB_OUTPUT"
+          echo "Job counts: archives=$ARCHIVE_JOBS rpm=$RPM_JOBS deb=$DEB_JOBS apk=$APK_JOBS"

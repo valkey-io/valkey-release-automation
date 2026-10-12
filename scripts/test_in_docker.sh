@@ -24,7 +24,12 @@ RPM_IMAGES=(
     "oraclelinux:9"
     "amazonlinux:2023"
 )
-ALL_IMAGES=("${DEB_IMAGES[@]}" "${RPM_IMAGES[@]}")
+# Alpine runs OpenRC instead of systemd (see setup_openrc_container.sh).
+APK_IMAGES=(
+    "alpine:3.22"
+    "alpine:3.24"
+)
+ALL_IMAGES=("${DEB_IMAGES[@]}" "${RPM_IMAGES[@]}" "${APK_IMAGES[@]}")
 
 # Color codes
 if [[ -t 1 ]]; then
@@ -66,7 +71,7 @@ usage() {
 Usage: scripts/test_in_docker.sh [OPTIONS]
 
 Install source (required):
-  --pkg-dir=DIR           Install from local .deb/.rpm files in DIR
+  --pkg-dir=DIR           Install from local .deb/.rpm/.apk files in DIR
 
 Target selection:
   --image=IMAGE           Run on a single Docker image (e.g. ubuntu:24.04)
@@ -81,6 +86,7 @@ Options:
 Supported images:
   DEB: ubuntu:24.04, debian:bookworm
   RPM: rockylinux:9, oraclelinux:9, amazonlinux:2023
+  APK: alpine:3.22, alpine:3.24
 
 Examples:
   # Single OS, local packages
@@ -102,11 +108,12 @@ warn() { printf "${YELLOW}WARNING:${RESET} %s\n" "$*" >&2; }
 err()  { printf "${RED}ERROR:${RESET} %s\n" "$*" >&2; }
 die()  { err "$@"; exit 1; }
 
-# Return "deb" or "rpm" for a given image name
+# Return "deb", "rpm" or "apk" for a given image name
 image_family() {
     local img="$1"
     case "$img" in
         ubuntu:*|debian:*) echo "deb" ;;
+        alpine:*)          echo "apk" ;;
         *)                 echo "rpm" ;;
     esac
 }
@@ -147,6 +154,12 @@ prepare_image() {
     local image="$1" family="$2"
     local prepared_tag="valkey-test-prepared-$(slug "$image")"
 
+    # Alpine has no systemd; OpenRC is set up inside the running container.
+    if [[ "$family" == "apk" ]]; then
+        echo "$image"
+        return
+    fi
+
     # Check if /sbin/init exists in the image
     if docker run --rm "$image" test -x /sbin/init 2>/dev/null; then
         echo "$image"
@@ -172,9 +185,15 @@ prepare_image() {
 }
 
 start_container() {
-    local image="$1" name="$2"
+    local image="$1" name="$2" family="${3:-}"
 
     log "Starting container $name ($image)..."
+    if [[ "$family" == "apk" ]]; then
+        # --init reaps zombies so OpenRC can tell when a service has stopped.
+        docker run -d --init --name "$name" "$image" sleep infinity >/dev/null
+        CONTAINERS_STARTED+=("$name")
+        return
+    fi
     docker run -d \
         --cap-add SYS_ADMIN \
         --security-opt seccomp=unconfined \
@@ -207,7 +226,10 @@ wait_for_systemd() {
 install_prereqs() {
     local name="$1" family="$2"
     log "Installing prerequisites in $name..."
-    if [[ "$family" == "deb" ]]; then
+    if [[ "$family" == "apk" ]]; then
+        docker cp "$SCRIPT_DIR/setup_openrc_container.sh" "$name:/tmp/setup_openrc_container.sh"
+        docker exec "$name" sh /tmp/setup_openrc_container.sh >/dev/null
+    elif [[ "$family" == "deb" ]]; then
         docker exec "$name" bash -c \
             "apt-get update -qq && apt-get install -y -qq procps iproute2 wget >/dev/null 2>&1"
     else
@@ -234,14 +256,14 @@ run_test_on_image() {
     run_image="$(prepare_image "$image" "$family")"
 
     # Start container
-    if ! start_container "$run_image" "$cname"; then
+    if ! start_container "$run_image" "$cname" "$family"; then
         err "Failed to start container for $image"
         RESULTS["$image"]="FAIL"
         return 1
     fi
 
     # Wait for systemd
-    if ! wait_for_systemd "$cname"; then
+    if [[ "$family" != "apk" ]] && ! wait_for_systemd "$cname"; then
         err "Systemd not ready in $image — continuing anyway"
     fi
 
@@ -346,12 +368,13 @@ determine_images() {
 
     if [[ -n "$PKG_DIR" ]]; then
         # Detect deb vs rpm from file extensions
-        local has_deb=false has_rpm=false
-        for f in "$PKG_DIR"/*.deb "$PKG_DIR"/*.rpm; do
+        local has_deb=false has_rpm=false has_apk=false
+        for f in "$PKG_DIR"/*.deb "$PKG_DIR"/*.rpm "$PKG_DIR"/*.apk; do
             [[ -f "$f" ]] || continue
             case "$f" in
                 *.deb) has_deb=true ;;
                 *.rpm) has_rpm=true ;;
+                *.apk) has_apk=true ;;
             esac
         done
 
@@ -361,8 +384,11 @@ determine_images() {
         if [[ "$has_rpm" == true ]]; then
             printf '%s\n' "${RPM_IMAGES[@]}"
         fi
-        if [[ "$has_deb" == false ]] && [[ "$has_rpm" == false ]]; then
-            die "No .deb or .rpm files found in $PKG_DIR"
+        if [[ "$has_apk" == true ]]; then
+            printf '%s\n' "${APK_IMAGES[@]}"
+        fi
+        if [[ "$has_deb" == false ]] && [[ "$has_rpm" == false ]] && [[ "$has_apk" == false ]]; then
+            die "No .deb, .rpm or .apk files found in $PKG_DIR"
         fi
         return
     fi

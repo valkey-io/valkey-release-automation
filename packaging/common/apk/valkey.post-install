@@ -1,0 +1,14 @@
+#!/bin/sh
+# Install only; enabling and starting the service is left to the operator,
+# as with the RPM/DEB packages.
+cat <<'EOF'
+-----------------------------------------------------------------------------
+Valkey has been installed successfully.
+
+To enable and start the default instance (/etc/valkey/default.conf)
+with OpenRC (valkey-openrc is installed automatically alongside openrc):
+    rc-update add valkey default
+    rc-service valkey start
+-----------------------------------------------------------------------------
+EOF
+exit 0

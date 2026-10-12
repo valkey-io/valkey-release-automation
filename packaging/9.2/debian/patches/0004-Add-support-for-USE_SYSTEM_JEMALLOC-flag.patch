@@ -1,0 +1,39 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 28 Apr 2025 15:45:49 -0300
+Subject: Add support for USE_SYSTEM_JEMALLOC flag.
+
+Last-Update: 15-08-2026
+Reduced to a single Makefile hunk. jemalloc.h strips the je_ prefix from the
+public API when the library is built without a prefix, then #undefs the je_*
+names again at the end of the header unless JEMALLOC_NO_DEMANGLE is defined.
+Defining it is what the per-file "#define je_mallctl mallctl" shims in
+debug.c, object.c, sds.c, zmalloc.c and zmalloc.h were emulating by hand, so
+those hunks are no longer needed.
+
+Note that active defragmentation stays compiled out with a system jemalloc:
+allocator_defrag.h gates HAVE_DEFRAG on the vendored build (JEMALLOC_FRAG_HINT
+on 7.2/8.0, VALKEY_VENDORED_JEMALLOC from 8.1 on). See valkey-io/valkey#1882.
+---
+ src/Makefile | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/Makefile b/src/Makefile
+index f1d126a..d728a10 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -330,10 +330,15 @@ ifeq ($(MALLOC),tcmalloc_minimal)
+ endif
+ 
+ ifeq ($(MALLOC),jemalloc)
++ifeq ($(USE_SYSTEM_JEMALLOC),yes)
++	FINAL_CFLAGS+= -DUSE_JEMALLOC -DUSE_SYSTEM_JEMALLOC -DJEMALLOC_NO_DEMANGLE
++	FINAL_LIBS := -ljemalloc $(FINAL_LIBS)
++else
+ 	DEPENDENCY_TARGETS+= jemalloc
+ 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
+ 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+ endif
++endif
+ 
+ ifeq ($(USE_LTTNG),yes)
+ 	FINAL_CFLAGS+=-DUSE_LTTNG
