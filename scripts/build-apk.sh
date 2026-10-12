@@ -18,9 +18,9 @@
 #   /source                  dir holding VALKEY_SOURCE_TARBALL (ro, optional)
 #   /output                  built .apk files are copied here
 #
-# Packages are signed with a throwaway key generated here. Only the
-# repository index is signed with the real key, in the publish job; the
-# signed index pins every package by checksum.
+# Packages are signed with a throwaway key generated here: candidate code
+# never shares a job with the release key. The publish job re-signs them
+# and signs the repository index with the release key (sign-apk.sh).
 set -eu
 
 : "${VALKEY_VERSION:?}" "${PLATFORM_ID:?}" "${EXPECTED_ARCH:?}"

@@ -9,6 +9,7 @@ Comprehensive documentation for the Valkey release automation and packaging infr
 - [Package Build Pipeline (packages.yml)](#package-build-pipeline)
 - [RPM Packaging](#rpm-packaging)
 - [DEB Packaging](#deb-packaging)
+- [APK Packaging](#apk-packaging)
 - [Version Management](#version-management)
   - [Template System (8.1/9.0+)](#template-system-8190)
 - [Cross-Version Upgrade Relationships](#cross-version-upgrade-relationships)
@@ -192,12 +193,13 @@ controller.
 ### Qualification
 
 `qualify-release.yml` accepts a release tag, exact source SHA, and optional
-request id. It builds the archive matrix and, for GA releases, every RPM/DEB
+request id. It builds the archive matrix and, for GA releases, every RPM/DEB/APK
 package without receiving AWS or publishing credentials. Candidate execution
 runs in explicitly read-only jobs with checkout credentials disabled; separate
 publisher jobs alone can mint OIDC tokens. The expected 2 x86, 2 ARM, 28 RPM,
-and 8 DEB breadth is enforced exactly (RPM/DEB are intentionally skipped for
-RCs). Skipped GA package builds fail the summary job.
+8 DEB and 6 APK breadth is enforced exactly (APK is 0 for 7.2, which has no APK
+packaging; packages are intentionally skipped for RCs). Skipped GA package
+builds fail the summary job.
 
 `valkey-ci-agent` dispatches qualification from its publication workflow and
 waits synchronously for the exact request id. Every implementation checkout is
@@ -213,9 +215,9 @@ and an optional `source_sha`. For production, the workflow always resolves
 tag and a supplied SHA must match it. This keeps the existing Valkey release
 trigger compatible without a separate Valkey workflow change.
 
-### packages.yml (RPM + DEB Builds)
+### packages.yml (RPM + DEB + APK Builds)
 
-`packages.yml` is a **separate workflow** that builds RPM and DEB distribution packages. It runs independently from `build-release.yml` and can be triggered via:
+`packages.yml` is a **separate workflow** that builds RPM, DEB and APK distribution packages. It runs independently from `build-release.yml` and can be triggered via:
 - `workflow_call` — invoked by other workflows
 - `workflow_dispatch` — manual trigger with a `version` input
 
@@ -236,10 +238,16 @@ packages.yml
        │       ├── build DEBs in Docker
        │       └── upload artifacts
        │
+       ├──► build-apk (3 Alpine releases × 2 arches, Valkey 8.0+)
+       │       ├── generate APKBUILD from template
+       │       ├── build APKs with abuild in Docker (throwaway signing key)
+       │       └── upload artifacts
+       │
        ├──► test-rpm ──► install + systemd test on each platform
        ├──► test-deb ──► install + systemd test on each platform
+       ├──► test-apk ──► install + OpenRC test, signed @valkey repository test
        │
-       ├──► publish-to-s3 ──► sign packages + create APT/YUM repos → upload to S3
+       ├──► publish-to-s3 ──► sign packages + create APT/YUM/APK repos → upload to S3
        ├──► deploy-pages ──► generate install instructions → deploy to GitHub Pages
        │
        └──► build-summary ──► aggregate results
@@ -642,6 +650,115 @@ The `debian/rules` file overrides several `dh_*` targets:
 
 ---
 
+## APK Packaging
+
+Alpine Linux packages are built for Valkey 8.0 and newer. There is no 7.2 APK
+packaging; `packages.yml` skips the APK jobs for 7.2.
+
+### APK Directory Structure
+
+```
+packaging/
+├── templates/apk/APKBUILD.template   # rendered by generate-from-templates.sh --type apk
+└── common/apk/
+    ├── valkey.initd, valkey.confd                    # OpenRC server service
+    ├── valkey-sentinel.initd, valkey-sentinel.confd  # OpenRC Sentinel service
+    ├── valkey.pre-install, valkey.post-install       # valkey user/group, notes
+    ├── valkey.logrotate, valkey.sysctl
+    └── keys/valkey-packages.rsa.pub                  # repository public key (enables publishing)
+```
+
+The configuration files are patched with the RPM `packaging/N.M/rpm/valkey-conf.patch`,
+then `supervised` is set to `no` (OpenRC supervises the process). A
+`packaging/N.M/apk/` directory, if present, overrides files for one line.
+
+### APK Build Process
+
+`build-apk.sh` runs in `alpine:<release>`: it renders the APKBUILD, downloads the
+source (or uses the exact-SHA tarball) and valkey-doc, and runs `abuild -r`.
+Packages are signed with a throwaway key generated in the container; the
+publish job re-signs them with the release key.
+
+Build flags match the other formats: TLS, bundled jemalloc, `USE_FAST_FLOAT=yes`
+for 8.1+, `BUILD_ZSTD=yes` for 9.2+ (a warning for 9.2 RCs that predate zstd,
+fatal for releases). When valkey-doc `N.M.0` is not published yet, the
+previous minor's docs are used, as for DEB.
+
+### APK Packages
+
+| Package | Contents |
+|---|---|
+| `valkey` | server, sentinel, CLI, benchmark, configs, logrotate, sysctl |
+| `valkey-dev` | module headers; provides `valkey-modules-abi` |
+| `valkey-openrc` | OpenRC services `valkey` and `valkey-sentinel` |
+| `valkey-compat-redis` | `redis-*` command symlinks (conflicts with `redis`) |
+| `valkey-compat-redis-dev` | `redismodule.h` |
+| `valkey-doc` | man pages and HTML documentation |
+
+Users pin the repository with the `@valkey` tag, so Alpine's own `valkey`
+package is never replaced unless `valkey@valkey` is requested.
+
+### OpenRC Services
+
+- `supervise-daemon` restarts a crashed server; `start_post` fails the start if
+  the server exits right away.
+- Instances: `ln -s valkey /etc/init.d/valkey.<name>` uses
+  `/etc/valkey/<name>.conf`; `valkey-sentinel.<name>` uses `sentinel-<name>.conf`.
+- Directories named in the config file are created as the `valkey` user, never as root.
+- `/etc/valkey` is `root:valkey 2770`, so Sentinel can rewrite its config.
+
+### APK Repository Signing
+
+`publish-to-s3.sh` publishes to `valkey-N.M/apk/v3.XX/<arch>/` (the release
+directory comes from the `branch` field in `package-platforms.json`). For each
+repository directory it runs the steps of `sign-apk.sh` in containers of that
+Alpine release, as the runner user, without network or capabilities:
+
+1. `prepare` (no key): check each new package's `.PKGINFO` (name, arch,
+   version) and split it into its control and data streams, dropping the
+   throwaway signature.
+2. `sign` (private key, read-only): sign the control streams with
+   `abuild-sign -t RSA256`.
+3. `assemble` (no key): join the signed control and the data again.
+   Hydrated packages keep the signature from their own publication.
+4. `index` (no key): check every package against the release key with
+   `apk verify`, rebuild `APKINDEX.tar.gz` over every package
+   (`apk index --rewrite-arch`, so noarch subpackages resolve under the arch
+   directory).
+5. `sign` (private key): sign the index with `abuild-sign -t RSA256`.
+
+Packages come from the build job and from S3, so they are parsed only in the
+keyless steps. The container holding the key sees only a scratch directory of
+files to sign, never the repository directory that is uploaded. Each index is
+built with its release's own apk-tools (v2 on 3.22, v3 on 3.23+).
+
+As for RPM and DEB, the release signature vouches for what the build job
+produced; the protection is the exact-SHA source build and the release
+approval, not the signing step.
+
+**Enabling APK publishing:** publishing starts once the public key is committed
+as `packaging/common/apk/keys/valkey-packages.rsa.pub` (see
+[New Environment Setup](#new-environment-setup)). Until then the publish job
+skips APK artifacts with a warning and the Pages site hides Alpine. Once the
+key is committed, `APK_PRIVATE_KEY` is required and must match it, or the
+publish job fails.
+
+**Key file name:** the name `valkey-packages.rsa.pub` is part of every
+signature (`.SIGN.RSA256.valkey-packages.rsa.pub`) and users install the key
+under that name. Changing the key or its name is a rotation every user must follow.
+The Pages site shows the key's SHA-256 fingerprint, and offers Alpine only for
+lines that have an APK repository in S3.
+
+### APK Testing
+
+`test-apk` runs `test_packages.sh` under OpenRC (`docker run --init`, prepared
+by `setup_openrc_container.sh`) and `test_apk_repo.sh`, which signs a repository
+with a test key through `sign-apk.sh` and checks that an untrusted index is
+refused, that `@valkey` installs these packages, that a re-signed package passes
+`apk verify`, and that a package not matching the index is rejected.
+
+---
+
 ## Version Management
 
 ### Version Override at Build Time
@@ -987,13 +1104,22 @@ Platforms are defined in [`.github/package-platforms.json`](.github/package-plat
 | Ubuntu 22.04 | Jammy | amd64, arm64 |
 | Ubuntu 24.04 | Noble | amd64, arm64 |
 
+### APK Platforms
+
+| Distribution | Repository branch | Architectures |
+|-------------|----------|---------------|
+| Alpine Linux 3.22 | `v3.22` | x86_64, aarch64 |
+| Alpine Linux 3.23 | `v3.23` | x86_64, aarch64 |
+| Alpine Linux 3.24 | `v3.24` | x86_64, aarch64 |
+
 ### Total Build Matrix
 
 ```
 RPM:  14 platforms × 2 architectures = 28 builds
 DEB:   4 platforms × 2 architectures =  8 builds
+APK:   3 platforms × 2 architectures =  6 builds (Valkey 8.0+)
                                        ─────────
-                              Total:   36 builds per version
+                              Total:   42 builds per version (36 for 7.2)
 ```
 
 ---
@@ -1015,15 +1141,20 @@ Signed packages are hosted on **AWS S3** (public read), while install instructio
     │             │             │              │
     │ valkey-9.0/ │             │ index.html   │
     │  rpm/el9/   │             │ GPG-KEY.asc  │
-    │  deb/...    │             └──────────────┘
-    │ GPG-KEY.asc │
+    │  deb/...    │             │ valkey-      │
+    │  apk/v3.22/ │             │ packages.    │
+    │ GPG-KEY.asc │             │ rsa.pub      │
+    │ valkey-     │             └──────────────┘
+    │ packages.   │
+    │ rsa.pub     │
     └─────────────┘
          ▲
-    dnf/apt/zypper
+    dnf/apt/zypper/apk
 ```
 
 **GitHub Secrets required:**
 - `GPG_PRIVATE_KEY` — GPG signing key
+- `APK_PRIVATE_KEY` — RSA key for the APK repositories (required once `packaging/common/apk/keys/valkey-packages.rsa.pub` is committed)
 - `S3_BUCKET` — S3 bucket name
 - `S3_REGION` — S3 bucket region
 - `AWS_ROLE_TO_ASSUME` — IAM role ARN for OIDC federation (used by `aws-actions/configure-aws-credentials`)
@@ -1041,7 +1172,7 @@ Signed packages are hosted on **AWS S3** (public read), while install instructio
 }
 ```
 
-No static website hosting is needed — S3 direct URLs work for `dnf`/`apt`/`zypper`.
+No static website hosting is needed — S3 direct URLs work for `dnf`/`apt`/`zypper`/`apk`.
 
 ---
 
@@ -1077,6 +1208,18 @@ If you prefer to do this manually, see the [README.md Authentication Setup](#aut
 
 This generates a 4096-bit RSA GPG signing key, stores it as the `GPG_PRIVATE_KEY` secret, enables workflow read/write permissions, creates the `gh-pages` branch, and configures GitHub Pages.
 
+### Step 2b: Generate the APK Signing Key
+
+```bash
+./scripts/setup-apk-signing-key.sh --repo owner/repo --backup-dir ~/valkey-apk-key
+```
+
+This generates a 4096-bit RSA key, stores it as the `APK_PRIVATE_KEY` secret,
+and writes the public key to `packaging/common/apk/keys/valkey-packages.rsa.pub`.
+It refuses to run if the secret or the public key already exists.
+Commit that file to enable APK publishing. Keep the backup offline: replacing
+the key later is a rotation every Alpine user has to follow.
+
 ### Step 3: Verify Secrets
 
 Confirm all required secrets are set:
@@ -1090,6 +1233,7 @@ Expected secrets:
 | Secret | Source |
 |--------|--------|
 | `GPG_PRIVATE_KEY` | `setup-github-pages.sh` (Step 2) |
+| `APK_PRIVATE_KEY` | `setup-apk-signing-key.sh` (Step 2b) |
 | `S3_BUCKET` | `setup-s3-bucket.sh` (Step 1) |
 | `S3_REGION` | `setup-s3-bucket.sh` (Step 1) |
 | `AWS_ROLE_TO_ASSUME` | `setup-s3-bucket.sh` (Step 1) |
@@ -1222,6 +1366,64 @@ All scripts live in the `scripts/` directory. The core build and publishing scri
 
 ---
 
+### build-apk.sh
+
+**Purpose:** Builds APK packages inside an `alpine:<release>` container for a single platform/architecture combination.
+
+**Invoked by:** `packages.yml` → `build-apk` job (`sh /scripts/build-apk.sh`)
+
+**Environment variables:**
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `VALKEY_VERSION` | `9.2.0` | Version to build (required) |
+| `PLATFORM_ID` | `alpine3.22` | Distro identifier (required) |
+| `EXPECTED_ARCH` | `x86_64` | Architecture for validation (required) |
+| `VALKEY_SOURCE_TARBALL` | `valkey-<sha>.tar.gz` | Exact-SHA source in `/source` |
+| `ALLOW_BRANCH_FALLBACK` | `true` | Pre-tag dev/PR builds only: build the `N.M` branch |
+| `DOC_VERSION` | `9.1.0` | Override the valkey-doc release |
+
+**Docker volume mounts:**
+
+| Mount | Container path | Description |
+|-------|---------------|-------------|
+| `scripts/` | `/scripts:ro` | Build scripts |
+| `packaging/common/apk/` | `/packaging-common:ro` | OpenRC and install files |
+| `packaging/templates/apk/` | `/packaging-templates:ro` | APKBUILD template |
+| `packaging/N.M/rpm/` | `/packaging-rpm:ro` | `valkey-conf.patch` (shared with RPM) |
+| `packaging/N.M/apk/` | `/packaging-override:ro` | Version-specific overrides (optional) |
+| `output/` | `/output` | Built APKs written here |
+
+---
+
+### sign-apk.sh
+
+**Purpose:** Re-signs this run's APKs, rebuilds `APKINDEX.tar.gz` and signs it, for one repository directory. See [APK Repository Signing](#apk-repository-signing).
+
+**Invoked by:** `publish-to-s3.sh`, one container per step (`--network none`; only `sign` gets the key, at `/apk-key/private.rsa`), and `test_apk_repo.sh` (`all`, with a test key via `APK_KEY_DIR`)
+
+**Usage:**
+```bash
+sign-apk.sh prepare <repo> <work> <arch> <version> <new.apk>...
+sign-apk.sh sign <work> <key_name> <file>...
+sign-apk.sh assemble <repo> <work> <new.apk>...
+sign-apk.sh index <repo> <work> <arch> <key_name> <description>
+sign-apk.sh all <repo> <arch> <version> <key_name> <description> <new.apk>...
+```
+
+---
+
+### setup-apk-signing-key.sh
+
+**Purpose:** Generates the APK repository key, stores `APK_PRIVATE_KEY`, and writes the public key to commit. Refuses to replace an existing secret or public key.
+
+**Usage:**
+```bash
+setup-apk-signing-key.sh [--repo owner/repo] [--backup-dir DIR]
+```
+
+---
+
 ### generate-from-templates.sh
 
 **Purpose:** Generates version-specific packaging files (`control`, `rules`, `valkey.spec`) from parameterized templates. Replaces `@@PLACEHOLDER@@` variables with values derived from the version string.
@@ -1258,13 +1460,13 @@ Input: 9.0.3
 
 ### publish-to-s3.sh
 
-**Purpose:** Signs packages, builds APT and YUM repositories, and uploads everything to an S3 bucket with public read access.
+**Purpose:** Signs packages, builds APT, YUM and APK repositories, and uploads everything to an S3 bucket with public read access.
 
 **Invoked by:** `packages.yml` → `publish-to-s3` job (runs on `ubuntu-latest`, not in Docker)
 
 **Usage:**
 ```bash
-publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_region>
+publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_region> [<apk_key_file>]
 ```
 
 **Arguments:**
@@ -1276,6 +1478,7 @@ publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_reg
 | `artifacts_dir` | `artifacts` | Directory with downloaded build artifacts |
 | `s3_bucket` | `valkey-packages` | S3 bucket name |
 | `s3_region` | `us-east-1` | S3 bucket region |
+| `apk_key_file` | `$RUNNER_TEMP/apk-signing-key.rsa` | APK private key (PEM, 0600); required once APK publishing is enabled |
 
 **AWS credentials:** Provided via OIDC using `aws-actions/configure-aws-credentials` and `AWS_ROLE_TO_ASSUME` secret
 
@@ -1306,6 +1509,17 @@ DEB Repositories:
      e. Generate Release file with MD5, SHA1, SHA256 checksums
      f. Sign Release → Release.gpg (detached) + InRelease (clearsigned)
 
+APK Repositories (once packaging/common/apk/keys/valkey-packages.rsa.pub is committed):
+  1. Check that the APK key matches the committed public key
+  2. For each Alpine release/arch artifact directory:
+     a. Hydrate staging/valkey-N/apk/v3.XX/<arch>/ from S3 as above
+     b. Stage this run's .apk files into the same directory
+     c. Run sign-apk.sh's steps in alpine:<release> containers without
+        network: re-sign THIS RUN's packages (RSA256) with only the key
+        container seeing the key, apk verify every package, rebuild
+        APKINDEX.tar.gz, sign it (RSA256)
+  3. Copy the public key to staging/valkey-packages.rsa.pub
+
 Upload:
   1. Export public GPG key as staging/GPG-KEY-valkey.asc
   2. aws s3 sync staging/ s3://<bucket>/ --acl public-read
@@ -1318,12 +1532,16 @@ every patch release of a line rewrites that line's shared index.
 ```
 s3://bucket/
 ├── GPG-KEY-valkey.asc
+├── valkey-packages.rsa.pub
 ├── valkey-9.0/
 │   ├── rpm/
 │   │   ├── el9/x86_64/*.rpm + repodata/
 │   │   └── ...
-│   └── deb/
-│       ├── debian12/amd64/*.deb + Packages + Release + InRelease
+│   ├── deb/
+│   │   ├── debian12/amd64/*.deb + Packages + Release + InRelease
+│   │   └── ...
+│   └── apk/
+│       ├── v3.22/x86_64/*.apk + APKINDEX.tar.gz
 │       └── ...
 └── valkey-8.1/
     └── ...

@@ -26,6 +26,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             "Enforce the complete release matrix",
             '"$X86_COUNT" -ne 2',
             '"$RPM_JOBS" -ne 28',
+            '"$APK_JOBS" -ne 6',
         ):
             self.assertIn(contract, text)
 
@@ -115,6 +116,40 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         # A failed APK build or test must block publication like RPM/DEB.
         self.assertIn("build-apk", jobs["publish-to-s3"]["needs"])
         self.assertIn("test-apk", jobs["publish-to-s3"]["needs"])
+
+    def test_apk_signing_key_is_confined_to_the_publish_job(self) -> None:
+        # The APK repository key is as sensitive as GPG_PRIVATE_KEY: only
+        # publish-to-s3 may read it, and only as a file for the signing
+        # container, which then runs without network.
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            jobs = yaml.safe_load(path.read_text(encoding="utf-8"))["jobs"]
+            for name, job in jobs.items():
+                if path.name == "packages.yml" and name == "publish-to-s3":
+                    continue
+                self.assertNotIn("APK_PRIVATE_KEY", yaml.safe_dump(job), f"{path.name}:{name}")
+        publish = yaml.safe_load(workflow("packages.yml"))["jobs"]["publish-to-s3"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        write = steps["Write APK signing key"]
+        self.assertEqual(write["env"], {"APK_PRIVATE_KEY": "${{ secrets.APK_PRIVATE_KEY }}"})
+        self.assertIn("umask 077", write["run"])
+        self.assertIn('"${APK_KEY_FILE:-}"', steps["Sign packages and upload to S3"]["run"])
+        self.assertEqual(steps["Remove APK signing key"]["if"], "always()")
+        names = [step.get("name") for step in publish["steps"]]
+        self.assertLess(names.index("Write APK signing key"), names.index("Sign packages and upload to S3"))
+        self.assertEqual(names[-1], "Remove APK signing key")
+        self.assertIn("github.ref == 'refs/heads/main'", publish["if"])
+        publish_script = Path("scripts/publish-to-s3.sh").read_text(encoding="utf-8")
+        self.assertIn("docker run --rm --network none", publish_script)
+        self.assertIn("--cap-drop ALL", publish_script)
+        self.assertIn("does not match", publish_script)
+        # Only the keyed step mounts the private key, and it never mounts the
+        # repository directory that is uploaded to S3.
+        self.assertEqual(publish_script.count("/apk-key/private.rsa:ro"), 1)
+        keyed = publish_script.split("apk_keyed() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("/apk-key/private.rsa:ro", keyed)
+        self.assertNotIn(":/repo", keyed)
+        keyless = publish_script.split("apk_keyless() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("APK_KEY_FILE", keyless)
 
     def test_hash_and_website_commits_are_signed_off(self) -> None:
         hashes = workflow("update-valkey-hashes.yml")

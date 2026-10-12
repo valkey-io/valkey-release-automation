@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate GitHub Pages site with install instructions and GPG key.
+# Generate GitHub Pages site with install instructions and signing keys.
 # Packages are hosted on S3; this script only builds the static site.
 # Usage: publish-repos.sh <version> <gpg_fingerprint> <repo_url> <pages_url> <s3_bucket> <s3_region> <site_dir> <template_dir>
 set -euo pipefail
@@ -12,6 +12,15 @@ S3_BUCKET="$5"
 S3_REGION="$6"
 SITE_DIR="$7"
 TEMPLATE_DIR="$8"
+
+# Alpine instructions appear once APK publishing is enabled, i.e. once the
+# repository's public key is committed (see publish-to-s3.sh).
+APK_PUBLIC_KEY="$(cd "$(dirname "$0")/.." && pwd)/packaging/common/apk/keys/valkey-packages.rsa.pub"
+if [ -f "$APK_PUBLIC_KEY" ]; then
+  APK_ENABLED=true
+else
+  APK_ENABLED=false
+fi
 
 MAJOR="${VERSION%%.*}"
 MINOR_PART="${VERSION#*.}"
@@ -65,6 +74,20 @@ if ! echo ",${AVAILABLE_VERSIONS}," | grep -q ",${CURRENT_VER},"; then
 fi
 echo "Detected versions: ${AVAILABLE_VERSIONS}"
 
+# Lines with an APK repository, so the page never offers Alpine for a line
+# that was never published for it (7.2, or lines published before APK).
+APK_VERSIONS=""
+APK_KEY_FINGERPRINT=""
+if [ "$APK_ENABLED" = true ]; then
+  for ver in ${AVAILABLE_VERSIONS//,/ }; do
+    if [ -n "$(aws s3 ls "s3://${S3_BUCKET}/packaging/valkey-${ver}/apk/" --region "$S3_REGION" 2>/dev/null || true)" ]; then
+      APK_VERSIONS="${APK_VERSIONS:+${APK_VERSIONS},}${ver}"
+    fi
+  done
+  APK_KEY_FINGERPRINT=$(openssl pkey -pubin -in "$APK_PUBLIC_KEY" -outform DER | sha256sum | cut -d' ' -f1)
+  echo "Versions with APK repositories: ${APK_VERSIONS:-none}"
+fi
+
 ################################################################################
 # Generate index.html from template
 ################################################################################
@@ -72,11 +95,17 @@ cp "${TEMPLATE_DIR}/index.html" "${SITE_DIR}/index.html"
 sed -i "s|%%PAGES_URL%%|${PAGES_URL}|g" "${SITE_DIR}/index.html"
 sed -i "s|%%REPO_URL%%|${REPO_URL}|g" "${SITE_DIR}/index.html"
 sed -i "s|%%VERSIONS%%|${AVAILABLE_VERSIONS}|g" "${SITE_DIR}/index.html"
+sed -i "s|%%APK_ENABLED%%|${APK_ENABLED}|g" "${SITE_DIR}/index.html"
+sed -i "s|%%APK_VERSIONS%%|${APK_VERSIONS}|g" "${SITE_DIR}/index.html"
+sed -i "s|%%APK_KEY_FINGERPRINT%%|${APK_KEY_FINGERPRINT}|g" "${SITE_DIR}/index.html"
 
 ################################################################################
 # Static files
 ################################################################################
 touch "${SITE_DIR}/.nojekyll"
 gpg --armor --export "$GPG_KEY" > "${SITE_DIR}/GPG-KEY-valkey.asc"
+if [ "$APK_ENABLED" = true ]; then
+  cp "$APK_PUBLIC_KEY" "${SITE_DIR}/valkey-packages.rsa.pub"
+fi
 
 echo "Site ready at ${SITE_DIR}"
