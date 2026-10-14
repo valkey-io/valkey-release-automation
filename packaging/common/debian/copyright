@@ -232,6 +232,10 @@ Copyright: 2013-2019 night-shift <as.smljk@gmail.com>
            2021 Redis Labs
 License: BSL-1.0
 
+Files: deps/lz4/*
+Copyright: 2011-2023 Yann Collet
+License: BSD-2-clause
+
 Files: deps/jemalloc/*
 Copyright: 2002-2024 Jason Evans <jasone@canonware.com>
            2007-2012 Mozilla Foundation

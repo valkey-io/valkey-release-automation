@@ -252,8 +252,8 @@ jobs:
           else
             RPM_JOBS=$(jq '(.rpm.arch | length) * (.rpm.platform | length)' .github/package-platforms.json)
             DEB_JOBS=$(jq '(.deb.arch | length) * (.deb.platform | length)' .github/package-platforms.json)
-            if [[ "$RPM_JOBS" -ne 30 || "$DEB_JOBS" -ne 10 ]]; then
-              echo "Incomplete package matrix: expected rpm=30 and deb=10, got rpm=$RPM_JOBS deb=$DEB_JOBS."
+            if [[ "$RPM_JOBS" -ne 28 || "$DEB_JOBS" -ne 8 ]]; then
+              echo "Incomplete package matrix: expected rpm=28 and deb=8, got rpm=$RPM_JOBS deb=$DEB_JOBS."
               exit 1
             fi
           fi

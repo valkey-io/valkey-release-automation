@@ -1,0 +1,25 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 28 Apr 2025 15:45:49 -0300
+Subject: Add CPPFLAGS to upstream makefiles
+
+Valkey 9.2 already passes CPPFLAGS through src/, linenoise, fpconv and
+hdr_histogram; only the newly vendored lz4 still drops it.
+
+Last-Update: 05-10-2026
+---
+ deps/lz4/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/deps/lz4/Makefile b/deps/lz4/Makefile
+index bfa8171..8ef05b8 100644
+--- a/deps/lz4/Makefile
++++ b/deps/lz4/Makefile
+@@ -2,7 +2,7 @@ STD=
+ WARN= -Wall
+ OPT= -Os
+ 
+-R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) -DXXH_NAMESPACE=VALKEY_LZ4_
++R_CFLAGS= $(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(CPPFLAGS) -DXXH_NAMESPACE=VALKEY_LZ4_
+ R_LDFLAGS= $(LDFLAGS)
+ DEBUG= -g
+ 

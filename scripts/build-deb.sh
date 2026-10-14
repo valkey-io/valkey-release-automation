@@ -10,9 +10,9 @@ echo ""
 
 echo "::group::Install build dependencies"
 
-# Debian 11 reached the end of LTS on 2026-08-31. Its live mirrors can no
-# longer provide a coherent, durable package set, so EOL platforms opt into
-# an immutable Debian snapshot through package-platforms.json. Supported
+# Once a Debian release is past LTS its live mirrors can no longer provide a
+# coherent, durable package set, so EOL platforms opt into an immutable
+# Debian snapshot through package-platforms.json ("apt_snapshot"). Supported
 # platforms continue to use their normal security repositories.
 if [ -n "${APT_SNAPSHOT:-}" ]; then
   if [[ ! "$APT_SNAPSHOT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
@@ -48,6 +48,7 @@ apt-get install -y \
   libjemalloc-dev \
   libssl-dev \
   libsystemd-dev \
+  libzstd-dev \
   tcl \
   tcl-dev \
   python3

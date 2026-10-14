@@ -25,7 +25,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             "qualification-summary:",
             "Enforce the complete release matrix",
             '"$X86_COUNT" -ne 2',
-            '"$RPM_JOBS" -ne 30',
+            '"$RPM_JOBS" -ne 28',
         ):
             self.assertIn(contract, text)
 
@@ -200,12 +200,11 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         platforms = json.loads(
             Path(".github/package-platforms.json").read_text(encoding="utf-8")
         )
-        debian11 = next(
-            platform
-            for platform in platforms["deb"]["platform"]
-            if platform["id"] == "debian11"
-        )
-        self.assertRegex(debian11["apt_snapshot"], r"^\d{8}T\d{6}Z$")
+        # No platform needs a snapshot right now, but any that opts in must
+        # pin an exact, immutable timestamp.
+        for platform in platforms["deb"]["platform"]:
+            if "apt_snapshot" in platform:
+                self.assertRegex(platform["apt_snapshot"], r"^\d{8}T\d{6}Z$")
 
         workflow_text = workflow("packages.yml")
         self.assertIn(

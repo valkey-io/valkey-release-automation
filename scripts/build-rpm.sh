@@ -28,6 +28,7 @@ if [ "$PLATFORM_FAMILY" = "suse" ]; then
     systemd-devel \
     systemd \
     libsystemd0 \
+    libzstd-devel-static \
     wget \
     tar \
     gzip
@@ -75,6 +76,12 @@ else
     wget \
     tar \
     gzip
+
+  # Static libzstd for BUILD_ZSTD (Valkey 9.2+). EL8/9/10 ship none, so the
+  # 9.2 spec bundles zstd there instead (see Source60 download below).
+  if [[ "$PLATFORM_ID" == fedora* ]] || [ "$PLATFORM_ID" = "amzn2023" ]; then
+    $PKG_MGR install -y libzstd-static
+  fi
 
   # Only Amazon Linux has pandoc for docs
   if [ "$PLATFORM_ID" = "amzn2023" ]; then
@@ -239,6 +246,14 @@ if [ ! -f "valkey-doc-${DOC_VERSION}.tar.gz" ]; then
     tar czf valkey-doc-${DOC_VERSION}.tar.gz valkey-doc-${DOC_VERSION}
     rm -rf valkey-doc-${DOC_VERSION}
   }
+fi
+
+# Bundled zstd (Valkey 9.2+ on EL): fetch Source60 only when the spec, as
+# evaluated for this platform, declares it. The spec verifies its sha256.
+ZSTD_URL=$(rpmspec -P $BUILD_ROOT/SPECS/valkey.spec 2>/dev/null | awk '/^Source60:/{print $2}')
+if [ -n "$ZSTD_URL" ] && [ ! -f "$(basename "$ZSTD_URL")" ]; then
+  echo "Downloading bundled zstd: ${ZSTD_URL}"
+  wget -q "$ZSTD_URL"
 fi
 
 echo "::endgroup::"
