@@ -24,9 +24,11 @@ permissions:
 jobs:
   commit-hash:
     runs-on: ubuntu-latest
-    # One README, appended to by every release: let concurrent releases wait
-    # their turn instead of racing the push (queue: max keeps every waiting
-    # run; the default would cancel all but the newest).
+    # One README, appended to by every release: concurrent releases wait
+    # their turn here instead of racing the push below (queue: max keeps
+    # every waiting run; the default would cancel all but the newest). The
+    # checkout happens inside the serialized job, so each run appends to the
+    # README as the previous release left it.
     concurrency:
       group: valkey-hashes-readme
       cancel-in-progress: false
@@ -130,35 +132,17 @@ jobs:
           }
 
           HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
-          BRANCH=$(git rev-parse --abbrev-ref HEAD)
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Several releases on the same day each append one line to the end
-          # of this README. The job's concurrency group serializes them; this
-          # loop covers a push that still loses a race. A rebase cannot
-          # recover (two appends at the end of the file always conflict), so
-          # start over from the branch as it is now and append again.
-          for attempt in 1 2 3 4 5; do
-            if grep -qF "$HASH $URL" README; then
-              echo "Hash entry already exists in README. Nothing to push."
-              break
-            fi
+          if ! grep -q "$HASH $URL" README; then
             echo "hash $FILENAME sha256 $HASH $URL" >> README
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
             git add README
             git commit -s -m "Update hash for $VERSION"
-            if git push origin HEAD; then
-              break
-            fi
-            if [[ "$attempt" == 5 ]]; then
-              echo "Could not push the hash for $VERSION after $attempt attempts" >&2
-              exit 1
-            fi
-            echo "Push rejected (attempt $attempt); starting over from the current branch"
-            sleep $((attempt * 5))
-            git fetch origin "$BRANCH"
-            git reset --hard "origin/$BRANCH"
-          done
+            git push origin HEAD
+          else
+            echo "Hash entry already exists in README. Skipping append."
+          fi
 
           rm "$FILENAME"
         env:
