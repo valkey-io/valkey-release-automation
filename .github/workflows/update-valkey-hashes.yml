@@ -24,6 +24,13 @@ permissions:
 jobs:
   commit-hash:
     runs-on: ubuntu-latest
+    # One README, appended to by every release: let concurrent releases wait
+    # their turn instead of racing the push (queue: max keeps every waiting
+    # run; the default would cancel all but the newest).
+    concurrency:
+      group: valkey-hashes-readme
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Validate inputs
         env:
@@ -123,34 +130,36 @@ jobs:
           }
 
           HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
-          
-          if ! grep -q "$HASH $URL" README; then
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Several releases on the same day each append one line to the end
+          # of this README. The job's concurrency group serializes them; this
+          # loop covers a push that still loses a race. A rebase cannot
+          # recover (two appends at the end of the file always conflict), so
+          # start over from the branch as it is now and append again.
+          for attempt in 1 2 3 4 5; do
+            if grep -qF "$HASH $URL" README; then
+              echo "Hash entry already exists in README. Nothing to push."
+              break
+            fi
             echo "hash $FILENAME sha256 $HASH $URL" >> README
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
             git add README
             git commit -s -m "Update hash for $VERSION"
-            # Several releases on the same day each append one line to the
-            # same README; a plain push loses the race to whichever run
-            # pushed seconds earlier, and that version's downstream updates
-            # are then skipped. Rebase onto the moved branch and retry.
-            for attempt in 1 2 3 4 5; do
-              if git push origin HEAD; then
-                break
-              fi
-              if [[ "$attempt" == 5 ]]; then
-                echo "Could not push the hash for $VERSION after $attempt attempts" >&2
-                exit 1
-              fi
-              echo "Push rejected (attempt $attempt); rebasing onto the current branch"
-              sleep $((attempt * 5))
-              git fetch origin
-              git rebase "origin/$(git rev-parse --abbrev-ref HEAD)"
-            done
-          else
-            echo "Hash entry already exists in README. Skipping append."
-          fi
-          
+            if git push origin HEAD; then
+              break
+            fi
+            if [[ "$attempt" == 5 ]]; then
+              echo "Could not push the hash for $VERSION after $attempt attempts" >&2
+              exit 1
+            fi
+            echo "Push rejected (attempt $attempt); starting over from the current branch"
+            sleep $((attempt * 5))
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+          done
+
           rm "$FILENAME"
         env:
           VERSION: ${{ inputs.version }}
