@@ -24,11 +24,6 @@ permissions:
 jobs:
   commit-hash:
     runs-on: ubuntu-latest
-    # One README, appended to by every release: concurrent releases wait
-    # their turn here instead of racing the push below (queue: max keeps
-    # every waiting run; the default would cancel all but the newest). The
-    # checkout happens inside the serialized job, so each run appends to the
-    # README as the previous release left it.
     concurrency:
       group: valkey-hashes-readme
       cancel-in-progress: false
@@ -132,7 +127,7 @@ jobs:
           }
 
           HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
-
+          
           if ! grep -q "$HASH $URL" README; then
             echo "hash $FILENAME sha256 $HASH $URL" >> README
             git config user.name "github-actions[bot]"
@@ -143,7 +138,7 @@ jobs:
           else
             echo "Hash entry already exists in README. Skipping append."
           fi
-
+          
           rm "$FILENAME"
         env:
           VERSION: ${{ inputs.version }}
