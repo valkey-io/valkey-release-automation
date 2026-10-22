@@ -739,6 +739,11 @@ jobs:
     concurrency:
       group: packages-publish-s3
       cancel-in-progress: false
+      # Several releases publish at once (every patch line on the same day).
+      # Without queue: max GitHub keeps one pending run per group and cancels
+      # the older one, so the third release's publish would be cancelled
+      # while the second waited, and that version would never reach S3.
+      queue: max
     runs-on: ubuntu-latest
     # Called release: build-release already proved its environment approval.
     # Direct dispatch publishes without an approval gate; process-inputs
@@ -806,6 +811,13 @@ jobs:
   deploy-pages:
     name: Deploy Pages
     needs: [process-inputs, publish-to-s3]
+    # Same group as publish-to-s3: the site is generated from the bucket's
+    # current listing and pushed to one gh-pages branch, so two releases
+    # deploying at once would race on both.
+    concurrency:
+      group: packages-publish-s3
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     # publish-to-s3 already requires main, but state it here too: success()
     # with a skipped dependency is subtle, and this job writes the public

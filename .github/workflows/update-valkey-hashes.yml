@@ -130,7 +130,23 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add README
             git commit -s -m "Update hash for $VERSION"
-            git push origin HEAD
+            # Several releases on the same day each append one line to the
+            # same README; a plain push loses the race to whichever run
+            # pushed seconds earlier, and that version's downstream updates
+            # are then skipped. Rebase onto the moved branch and retry.
+            for attempt in 1 2 3 4 5; do
+              if git push origin HEAD; then
+                break
+              fi
+              if [[ "$attempt" == 5 ]]; then
+                echo "Could not push the hash for $VERSION after $attempt attempts" >&2
+                exit 1
+              fi
+              echo "Push rejected (attempt $attempt); rebasing onto the current branch"
+              sleep $((attempt * 5))
+              git fetch origin
+              git rebase "origin/$(git rev-parse --abbrev-ref HEAD)"
+            done
           else
             echo "Hash entry already exists in README. Skipping append."
           fi
