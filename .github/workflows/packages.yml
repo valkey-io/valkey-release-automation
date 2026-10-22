@@ -739,6 +739,7 @@ jobs:
     concurrency:
       group: packages-publish-s3
       cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     # Called release: build-release already proved its environment approval.
     # Direct dispatch publishes without an approval gate; process-inputs
@@ -806,6 +807,10 @@ jobs:
   deploy-pages:
     name: Deploy Pages
     needs: [process-inputs, publish-to-s3]
+    concurrency:
+      group: packages-publish-s3
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     # publish-to-s3 already requires main, but state it here too: success()
     # with a skipped dependency is subtle, and this job writes the public

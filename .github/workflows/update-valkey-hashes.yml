@@ -24,6 +24,10 @@ permissions:
 jobs:
   commit-hash:
     runs-on: ubuntu-latest
+    concurrency:
+      group: valkey-hashes-readme
+      cancel-in-progress: false
+      queue: max
     steps:
       - name: Validate inputs
         env:
