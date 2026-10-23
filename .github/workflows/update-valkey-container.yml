@@ -88,6 +88,13 @@ jobs:
           path: valkey-container
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
 
+      - name: Checkout valkey-hashes
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ github.repository_owner }}/valkey-hashes
+          path: valkey-hashes
+          persist-credentials: false
+
       - name: Setup Python
         uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4.9.1
         with:
@@ -111,11 +118,22 @@ jobs:
           fi
         shell: bash
       
+      - name: Check the release hash is listed
+        if: inputs.version != 'unstable'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          grep -F "valkey-${VERSION}.tar.gz" valkey-hashes/README || {
+            echo "::error::valkey-hashes README has no entry for valkey-${VERSION}.tar.gz"
+            exit 1
+          }
+
       - name: Update new version
         id: version-update
         env:
           VERSION: ${{ inputs.version }}
           STRIPPED_VERSION: ${{ steps.strip_version.outputs.stripped_version }}
+          VALKEY_HASHES_README: ${{ github.workspace }}/valkey-hashes/README
         run: |
             cd valkey-container
             jqt='.jq-template.awk'
@@ -127,7 +145,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add .
-            
+
             if ! git diff --cached --quiet; then
               git commit -m "Update versions.json and Dockerfiles for version $VERSION" -s
               echo "has_changes=true" >> $GITHUB_OUTPUT
