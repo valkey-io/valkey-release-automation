@@ -173,6 +173,24 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         )
         self.assertIn('"$EVENT_NAME" == "workflow_dispatch" && "$PUBLISH" == "true"', packages)
 
+    def test_package_publisher_imports_rpm_key_with_privilege(self) -> None:
+        script = Path("scripts/publish-to-s3.sh").read_text(encoding="utf-8")
+        self.assertIn("sudo rpm --import /tmp/gpg-key-valkey.asc", script)
+        self.assertNotIn("\nrpm --import /tmp/gpg-key-valkey.asc", script)
+
+    def test_python_jobs_use_a_supported_runtime(self) -> None:
+        tests = workflow("tests.yml")
+        try_valkey = workflow("update-try-valkey.yml")
+        setup_python = (
+            "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0"
+        )
+        self.assertIn("runs-on: ubuntu-latest", tests)
+        self.assertIn('python-version: "3.11"', tests)
+        self.assertIn(setup_python, tests)
+        self.assertIn("runs-on: ubuntu-latest", try_valkey)
+        self.assertIn("python-version: '3.11'", try_valkey)
+        self.assertIn(setup_python, try_valkey)
+
     def test_every_production_publisher_requires_main(self) -> None:
         # The removed standalone-approval jobs also carried a current-main SHA
         # check, and dropping them dropped that control: workflow_dispatch runs

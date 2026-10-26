@@ -30,7 +30,7 @@ mkdir -p "${STAGING}"
 # Import GPG key into RPM database (needed for rpmsign)
 echo "Importing GPG key into RPM database..."
 gpg --armor --export "$GPG_KEY" > /tmp/gpg-key-valkey.asc
-rpm --import /tmp/gpg-key-valkey.asc
+sudo rpm --import /tmp/gpg-key-valkey.asc
 
 for dir in "${ARTIFACTS_DIR}"/valkey-rpms-*/; do
   [ -d "$dir" ] || continue
