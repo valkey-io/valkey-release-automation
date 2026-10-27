@@ -57,10 +57,12 @@ jobs:
           # out valkey-doc, pushes a release tag (patch path), and pushes a
           # branch plus opens a PR via peter-evans/create-pull-request
           # (major/minor path): contents write covers the git fetch, tag
-          # push, and branch push, pull-requests write covers PR creation,
-          # and metadata read covers the repository API lookups both actions
-          # perform. Nothing else is granted.
+          # push, and branch push, workflows write allows a tag to point to a
+          # commit containing workflow files, pull-requests write covers PR
+          # creation, and metadata read covers the repository API lookups both
+          # actions perform. Nothing else is granted.
           permission-contents: write
+          permission-workflows: write
           permission-pull-requests: write
           permission-metadata: read
 
