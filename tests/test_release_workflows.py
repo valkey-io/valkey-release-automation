@@ -105,6 +105,10 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("git commit -s", hashes)
         self.assertEqual(website.count("git commit -s"), 2)
 
+    def test_release_candidates_update_the_website(self) -> None:
+        jobs = yaml.safe_load(workflow("build-release.yml"))["jobs"]
+        self.assertNotIn("-rc", jobs["update-valkey-website"]["if"])
+
     def test_cross_repo_qualification_checks_out_automation_implementation(self) -> None:
         qualification = workflow("qualify-release.yml")
         packages = workflow("packages.yml")
