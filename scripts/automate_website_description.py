@@ -9,26 +9,22 @@ def get_tags_from_bashbrew(json_str: str, version: str) -> list:
     try:
         data = json.loads(json_str)
             
+        # A release page lists the tags pinned to its own version, never the
+        # line's moving aliases ("9.2", "9.2-rc"), which later releases take
+        # over. valkey-container tags an rc as "9.2.0-rc2", "9.2.0-rc2-trixie",
+        # ..., so an rc and a GA match the same way.
         target_tags = []
-        is_rc = "-rc" in version
-        base_version = version.split('-rc')[0] 
-        major_minor = '.'.join(base_version.split('.')[:2]) 
-        
         for entry in data["matrix"]["include"]:
-            version_to_match = major_minor if is_rc else base_version
-            
-            if version_to_match in entry["name"]:  
+            if version in entry["name"]:
                 meta_entries = entry.get("meta", {}).get("entries", [])
                 if meta_entries:
                     for tag in meta_entries[0].get("tags", []):
-                        clean_tag = tag.split(":")[-1]  
-                        if is_rc:
-                            if major_minor in clean_tag and "-rc" not in clean_tag:
-                                target_tags.append(clean_tag)
-                        else:
-                            if base_version in clean_tag:
-                                target_tags.append(clean_tag)
-        
+                        clean_tag = tag.split(":")[-1]
+                        if version in clean_tag:
+                            target_tags.append(clean_tag)
+
+        if not target_tags:
+            raise ValueError(f"no container tags for {version} in the bashbrew output")
         return target_tags
     except Exception as e:
         logging.error(f"Error getting tags from bashbrew: {e}")

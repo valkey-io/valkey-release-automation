@@ -421,15 +421,15 @@ jobs:
     # success checks on the prerequisites this job genuinely requires.
     # prod-approval is mandatory here because this is a production-only job;
     # the skipped allowance remains for expression robustness on non-prod runs.
-    # Release candidates do not update the public release page.
+    # Release candidates get a release page too (/download/releases/ lists
+    # them); Try Valkey skips rcs, so an rc's PR never touches that page.
     if: >-
       ${{ !cancelled() &&
           needs.process-inputs.result == 'success' &&
           needs.update-valkey-hashes.result == 'success' &&
           needs.update-valkey-container.result == 'success' &&
           (needs.prod-approval.result == 'success' || needs.prod-approval.result == 'skipped') &&
-          needs.process-inputs.outputs.environment == 'prod' &&
-          !contains(needs.process-inputs.outputs.version, '-rc') }}
+          needs.process-inputs.outputs.environment == 'prod' }}
     uses: ./.github/workflows/update-valkey-website.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
