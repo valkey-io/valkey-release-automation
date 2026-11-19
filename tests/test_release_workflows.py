@@ -29,11 +29,11 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                 "PAYLOAD_VERSION": "9.2.0",
                 "PAYLOAD_ENVIRONMENT": "dev",
                 "PAYLOAD_SOURCE_SHA": "",
-                "PAYLOAD_RELEASE_COMPONENT": "",
+                "PAYLOAD_RELEASE_COMPONENTS": "",
                 "INPUT_VERSION": "",
                 "INPUT_ENVIRONMENT": "",
                 "INPUT_SOURCE_SHA": "",
-                "INPUT_RELEASE_COMPONENT": "",
+                "INPUT_RELEASE_COMPONENTS": "",
                 "WORKFLOW_REF": "refs/heads/main",
             }
         )
@@ -128,7 +128,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             archives,
         )
 
-    def test_release_component_choice_gates_each_job(self) -> None:
+    def test_release_component_list_gates_each_job(self) -> None:
         text = workflow("build-release.yml")
         components = {
             "run_archives": (
@@ -149,26 +149,15 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         inputs = yaml.load(text, Loader=yaml.BaseLoader)["on"]["workflow_dispatch"][
             "inputs"
         ]
-        release_component = inputs["release_component"]
-        self.assertEqual(release_component["type"], "choice")
-        self.assertEqual(release_component["default"], "all")
+        release_components = inputs["release_components"]
+        self.assertEqual(release_components["type"], "string")
         self.assertEqual(
-            release_component["options"],
-            [
-                "all",
-                "archives",
-                "hashes",
-                "packages",
-                "container",
-                "docs",
-                "helm",
-                "try-valkey",
-                "website",
-                "bundle",
-            ],
+            release_components["default"],
+            "archives,hashes,packages,container,docs,helm,"
+            "try-valkey,website,bundle",
         )
         self.assertIn(
-            "github.event.client_payload.release_component",
+            "github.event.client_payload.release_components",
             text,
         )
 
@@ -206,7 +195,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertEqual(legacy_outputs[component], "true", component)
 
         tarball_result, tarball_outputs = self.run_build_release_inputs(
-            PAYLOAD_RELEASE_COMPONENT="archives"
+            PAYLOAD_RELEASE_COMPONENTS="archives"
         )
         self.assertEqual(
             tarball_result.returncode,
@@ -249,7 +238,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         for selected, expected in dependencies.items():
             with self.subTest(selected=selected):
                 result, outputs = self.run_build_release_inputs(
-                    PAYLOAD_RELEASE_COMPONENT=selected
+                    PAYLOAD_RELEASE_COMPONENTS=selected
                 )
                 self.assertEqual(
                     result.returncode,
@@ -262,6 +251,22 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                     if outputs[component] == "true"
                 }
                 self.assertEqual(enabled, expected)
+
+    def test_release_component_list_supports_multiple_outputs(self) -> None:
+        result, outputs = self.run_build_release_inputs(
+            PAYLOAD_RELEASE_COMPONENTS="archives, packages"
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stdout + result.stderr,
+        )
+        enabled = {
+            component
+            for component, value in outputs.items()
+            if component.startswith("run_") and value == "true"
+        }
+        self.assertEqual(enabled, {"run_archives", "run_packages"})
 
     def test_candidate_code_never_shares_a_job_with_oidc(self) -> None:
         archives = workflow("call-build-linux-archives.yml")

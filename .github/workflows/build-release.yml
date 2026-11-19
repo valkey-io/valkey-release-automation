@@ -37,22 +37,11 @@ on:
         description: "Exact Valkey commit (full lowercase 40-hex); optional, but must match the prod tag when supplied"
         required: false
         default: ''
-      release_component:
-        type: choice
-        description: Release output to run; dependencies are included automatically
+      release_components:
+        type: string
+        description: Components to run (delete ones to skip; dependencies are automatic; do not leave empty)
         required: false
-        default: all
-        options:
-          - all
-          - archives
-          - hashes
-          - packages
-          - container
-          - docs
-          - helm
-          - try-valkey
-          - website
-          - bundle
+        default: "archives,hashes,packages,container,docs,helm,try-valkey,website,bundle"
 
 # Least privilege by default. id-token: write is granted only on the
 # specific jobs that assume the AWS role via OIDC (the package build calls
@@ -96,37 +85,43 @@ jobs:
           PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
           PAYLOAD_ENVIRONMENT: ${{ github.event.client_payload.environment }}
           PAYLOAD_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          PAYLOAD_RELEASE_COMPONENT: ${{ github.event.client_payload.release_component }}
+          PAYLOAD_RELEASE_COMPONENTS: ${{ github.event.client_payload.release_components }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
           INPUT_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
-          INPUT_RELEASE_COMPONENT: ${{ github.event.inputs.release_component }}
+          INPUT_RELEASE_COMPONENTS: ${{ github.event.inputs.release_components }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+
+          ALL_COMPONENTS="archives,hashes,packages,container,docs,helm,try-valkey,website,bundle"
 
           # Determine the event type and select the candidate values.
           if [[ "${EVENT_NAME}" == "repository_dispatch" ]]; then
             VERSION="${PAYLOAD_VERSION}"
             ENVIRONMENT="${PAYLOAD_ENVIRONMENT}"
             SOURCE_SHA="${PAYLOAD_SOURCE_SHA}"
-            RELEASE_COMPONENT="${PAYLOAD_RELEASE_COMPONENT}"
+            RELEASE_COMPONENTS="${PAYLOAD_RELEASE_COMPONENTS}"
+            # Existing callers do not send this new field.
+            if [[ -z "$RELEASE_COMPONENTS" ]]; then
+              RELEASE_COMPONENTS="$ALL_COMPONENTS"
+            fi
           elif [[ "${EVENT_NAME}" == "push" ]]; then
             VERSION="unstable"
             ENVIRONMENT="dev"
             SOURCE_SHA=""
-            RELEASE_COMPONENT=all
+            RELEASE_COMPONENTS="$ALL_COMPONENTS"
           else
             VERSION="${INPUT_VERSION}"
             ENVIRONMENT="${INPUT_ENVIRONMENT}"
             SOURCE_SHA="${INPUT_SOURCE_SHA}"
-            RELEASE_COMPONENT="${INPUT_RELEASE_COMPONENT}"
+            RELEASE_COMPONENTS="${INPUT_RELEASE_COMPONENTS}"
           fi
 
-          # Missing means "all" so existing repository_dispatch callers keep
-          # the original full-release behavior.
-          if [[ -z "$RELEASE_COMPONENT" ]]; then
-            RELEASE_COMPONENT=all
+          RELEASE_COMPONENTS="${RELEASE_COMPONENTS//[[:space:]]/}"
+          if [[ -z "$RELEASE_COMPONENTS" ]]; then
+            echo "release_components must contain at least one component."
+            exit 1
           fi
 
           RUN_ARCHIVES=false
@@ -139,55 +134,47 @@ jobs:
           RUN_WEBSITE=false
           RUN_BUNDLE=false
 
-          # This is the single dependency map for selectable release outputs.
-          case "$RELEASE_COMPONENT" in
-            all)
-              RUN_ARCHIVES=true
-              RUN_HASHES=true
-              RUN_PACKAGES=true
-              RUN_CONTAINER=true
-              RUN_DOCS=true
-              RUN_HELM=true
-              RUN_TRY_VALKEY=true
-              RUN_WEBSITE=true
-              RUN_BUNDLE=true
-              ;;
-            archives) RUN_ARCHIVES=true ;;
-            hashes) RUN_HASHES=true ;;
-            packages) RUN_PACKAGES=true ;;
-            container)
-              RUN_HASHES=true
-              RUN_CONTAINER=true
-              ;;
-            docs)
-              RUN_HASHES=true
-              RUN_DOCS=true
-              ;;
-            helm)
-              RUN_HASHES=true
-              RUN_CONTAINER=true
-              RUN_HELM=true
-              ;;
-            try-valkey)
-              RUN_HASHES=true
-              RUN_TRY_VALKEY=true
-              ;;
-            website)
-              RUN_HASHES=true
-              RUN_CONTAINER=true
-              RUN_TRY_VALKEY=true
-              RUN_WEBSITE=true
-              ;;
-            bundle)
-              RUN_HASHES=true
-              RUN_CONTAINER=true
-              RUN_BUNDLE=true
-              ;;
-            *)
-              echo "Invalid release_component '$RELEASE_COMPONENT'."
-              exit 1
-              ;;
-          esac
+          # This is the single dependency map. Multiple selections are merged.
+          IFS=, read -ra SELECTED_COMPONENTS <<< "$RELEASE_COMPONENTS"
+          for component in "${SELECTED_COMPONENTS[@]}"; do
+            case "$component" in
+              archives) RUN_ARCHIVES=true ;;
+              hashes) RUN_HASHES=true ;;
+              packages) RUN_PACKAGES=true ;;
+              container)
+                RUN_HASHES=true
+                RUN_CONTAINER=true
+                ;;
+              docs)
+                RUN_HASHES=true
+                RUN_DOCS=true
+                ;;
+              helm)
+                RUN_HASHES=true
+                RUN_CONTAINER=true
+                RUN_HELM=true
+                ;;
+              try-valkey)
+                RUN_HASHES=true
+                RUN_TRY_VALKEY=true
+                ;;
+              website)
+                RUN_HASHES=true
+                RUN_CONTAINER=true
+                RUN_TRY_VALKEY=true
+                RUN_WEBSITE=true
+                ;;
+              bundle)
+                RUN_HASHES=true
+                RUN_CONTAINER=true
+                RUN_BUNDLE=true
+                ;;
+              *)
+                echo "Invalid release component '$component'."
+                exit 1
+                ;;
+            esac
+          done
 
           # Validate version FIRST, before any other use of the value.
           if [[ ! "${VERSION}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
