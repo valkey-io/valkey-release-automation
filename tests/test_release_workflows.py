@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +15,57 @@ def workflow(name: str) -> str:
 
 
 class ReleaseWorkflowCoverageTest(unittest.TestCase):
+    def run_build_release_inputs(
+        self, **overrides: str
+    ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+        build = yaml.safe_load(workflow("build-release.yml"))
+        script = build["jobs"]["process-inputs"]["steps"][0]["run"]
+        env = os.environ.copy()
+        payload = {
+            "version": "9.2.0",
+            "environment": "dev",
+            "source_sha": "",
+        }
+        if "PAYLOAD_RELEASE_COMPONENTS" in overrides:
+            payload["release_components"] = overrides["PAYLOAD_RELEASE_COMPONENTS"]
+        env.update(
+            {
+                "GH_TOKEN": "",
+                "REPO_OWNER": "valkey-io",
+                "EVENT_NAME": "repository_dispatch",
+                "PAYLOAD_VERSION": "9.2.0",
+                "PAYLOAD_ENVIRONMENT": "dev",
+                "PAYLOAD_SOURCE_SHA": "",
+                "PAYLOAD_RELEASE_COMPONENTS": "",
+                "PAYLOAD_JSON": json.dumps(payload),
+                "INPUT_VERSION": "",
+                "INPUT_ENVIRONMENT": "",
+                "INPUT_SOURCE_SHA": "",
+                "INPUT_RELEASE_COMPONENTS": "",
+                "WORKFLOW_REF": "refs/heads/main",
+            }
+        )
+        env.update(overrides)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "github-output"
+            env["GITHUB_OUTPUT"] = str(output_path)
+            result = subprocess.run(
+                ["bash", "-c", script],
+                cwd=Path.cwd(),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            outputs = {}
+            if output_path.exists():
+                outputs = dict(
+                    line.split("=", 1)
+                    for line in output_path.read_text(encoding="utf-8").splitlines()
+                )
+        return result, outputs
+
     def test_qualification_builds_every_non_publishing_family(self) -> None:
         text = workflow("qualify-release.yml")
         for contract in (
@@ -73,6 +127,164 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             packages.count("          SHA: ${{ needs.process-inputs.outputs.source_sha }}"),
             2,
         )
+
+    def test_zstd_version_gate_uses_initialized_variables(self) -> None:
+        archives = workflow("call-build-linux-archives.yml")
+        self.assertIn("IFS=. read -r MAJOR MINOR _", archives)
+        self.assertIn(
+            "if (( MAJOR > 9 || (MAJOR == 9 && MINOR >= 2) ));",
+            archives,
+        )
+
+    def test_release_component_list_gates_each_job(self) -> None:
+        text = workflow("build-release.yml")
+        components = {
+            "run_archives": (
+                "generate-build-matrix",
+                "release-build-linux-x86-packages",
+                "release-build-linux-arm-packages",
+            ),
+            "run_hashes": ("update-valkey-hashes",),
+            "run_packages": ("release-build-packages",),
+            "run_container": ("update-valkey-container",),
+            "run_docs": ("update-valkey-doc",),
+            "run_helm": ("update-valkey-helm",),
+            "run_try_valkey": ("update-try-valkey",),
+            "run_website": ("update-valkey-website",),
+            "run_bundle": ("trigger-valkey-bundle",),
+        }
+        jobs = yaml.safe_load(text)["jobs"]
+        inputs = yaml.load(text, Loader=yaml.BaseLoader)["on"]["workflow_dispatch"][
+            "inputs"
+        ]
+        release_components = inputs["release_components"]
+        self.assertEqual(release_components["type"], "string")
+        self.assertEqual(
+            release_components["default"],
+            "archives,hashes,packages,container,docs,helm,"
+            "try-valkey,website,bundle",
+        )
+        self.assertIn(
+            "github.event.client_payload.release_components",
+            text,
+        )
+
+        for component, gated_jobs in components.items():
+            self.assertIn(
+                f"echo \"{component}=${{{component.upper()}}}\"",
+                text,
+            )
+            for job in gated_jobs:
+                self.assertIn(component, str(jobs[job].get("if", "")), job)
+
+        approval_condition = str(jobs["prod-approval"].get("if", ""))
+        self.assertNotIn("run_", approval_condition)
+
+    def test_release_components_preserve_legacy_and_tarball_only_calls(self) -> None:
+        component_outputs = (
+            "run_archives",
+            "run_hashes",
+            "run_packages",
+            "run_container",
+            "run_docs",
+            "run_helm",
+            "run_try_valkey",
+            "run_website",
+            "run_bundle",
+        )
+
+        legacy_result, legacy_outputs = self.run_build_release_inputs()
+        self.assertEqual(
+            legacy_result.returncode,
+            0,
+            legacy_result.stdout + legacy_result.stderr,
+        )
+        for component in component_outputs:
+            self.assertEqual(legacy_outputs[component], "true", component)
+
+        tarball_result, tarball_outputs = self.run_build_release_inputs(
+            PAYLOAD_RELEASE_COMPONENTS="archives"
+        )
+        self.assertEqual(
+            tarball_result.returncode,
+            0,
+            tarball_result.stdout + tarball_result.stderr,
+        )
+        self.assertEqual(tarball_outputs["run_archives"], "true")
+        for component in component_outputs[1:]:
+            self.assertEqual(tarball_outputs[component], "false", component)
+
+    def test_release_components_expand_their_dependency_trees(self) -> None:
+        dependencies = {
+            "archives": {"run_archives"},
+            "hashes": {"run_hashes"},
+            "packages": {"run_packages"},
+            "container": {"run_container", "run_hashes"},
+            "docs": {"run_docs", "run_hashes"},
+            "helm": {"run_helm", "run_container", "run_hashes"},
+            "try-valkey": {"run_try_valkey", "run_hashes"},
+            "website": {
+                "run_website",
+                "run_container",
+                "run_hashes",
+            },
+            "bundle": {"run_bundle", "run_container", "run_hashes"},
+        }
+        component_outputs = {
+            "run_archives",
+            "run_hashes",
+            "run_packages",
+            "run_container",
+            "run_docs",
+            "run_helm",
+            "run_try_valkey",
+            "run_website",
+            "run_bundle",
+        }
+
+        for selected, expected in dependencies.items():
+            with self.subTest(selected=selected):
+                result, outputs = self.run_build_release_inputs(
+                    PAYLOAD_RELEASE_COMPONENTS=selected
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    result.stdout + result.stderr,
+                )
+                enabled = {
+                    component
+                    for component in component_outputs
+                    if outputs[component] == "true"
+                }
+                self.assertEqual(enabled, expected)
+
+    def test_explicit_empty_dispatch_does_not_select_every_component(self) -> None:
+        result, outputs = self.run_build_release_inputs(
+            PAYLOAD_RELEASE_COMPONENTS=""
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(outputs, {})
+        self.assertIn(
+            "release_components must contain at least one component.",
+            result.stdout + result.stderr,
+        )
+
+    def test_release_component_list_supports_multiple_outputs(self) -> None:
+        result, outputs = self.run_build_release_inputs(
+            PAYLOAD_RELEASE_COMPONENTS="archives, packages"
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            result.stdout + result.stderr,
+        )
+        enabled = {
+            component
+            for component, value in outputs.items()
+            if component.startswith("run_") and value == "true"
+        }
+        self.assertEqual(enabled, {"run_archives", "run_packages"})
 
     def test_candidate_code_never_shares_a_job_with_oidc(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
