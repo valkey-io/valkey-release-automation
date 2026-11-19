@@ -84,9 +84,6 @@ jobs:
 
           echo "Building for version: $VERSION"
 
-          # Zstandard (Valkey 9.2+) links the static libzstd.a from libzstd-dev,
-          # so the archive has no new runtime dependency. Compare major*100+minor
-          # as integers: bc would rank 9.10 below 9.2.
           ZSTD_FLAG=""
           if [[ "$VERSION" == "unstable" ]]; then
             ZSTD_FLAG="BUILD_ZSTD=yes"
@@ -116,7 +113,6 @@ jobs:
         if: steps.make.outputs.zstd == 'yes'
         run: |
           set -euo pipefail
-          # Startup fails if rdbcompression zstd is unavailable in this build.
           sock="$RUNNER_TEMP/valkey-zstd.sock"
           src/valkey-server --port 0 --unixsocket "$sock" --save '' \
             --rdbcompression zstd --dir "$RUNNER_TEMP" --daemonize yes
