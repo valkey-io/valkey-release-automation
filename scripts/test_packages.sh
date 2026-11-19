@@ -454,6 +454,10 @@ test_directories() {
     if [[ "$OS_FAMILY" == "deb" ]]; then
         assert_owner /etc/valkey "valkey:valkey"
         assert_perms /etc/valkey 2770
+    elif [[ "$(printf '%s\n' 9.2 "$EXPECTED_VERSION" | sort -V | head -1)" == "9.2" ]]; then
+        # 9.2+ Sentinel must be able to create temp files in its config dir.
+        assert_owner /etc/valkey "valkey:valkey"
+        assert_perms /etc/valkey 2770
     else
         assert_owner /etc/valkey "root:root"
         assert_perms /etc/valkey 755

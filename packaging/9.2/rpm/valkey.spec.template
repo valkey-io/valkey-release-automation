@@ -551,7 +551,9 @@ EOF
 %dir %{_libdir}/%{name}
 %dir %{valkey_modules_dir}
 
-%dir %{_conf_dir}
+# Sentinel saves state by writing a temp file next to its config and
+# renaming it over the config, and refuses to start if it cannot.
+%dir %attr(2770,%{name},%{name}) %{_conf_dir}
 %dir %{_conf_dir}/includes
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/valkey.defaults.conf
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/sentinel.defaults.conf
