@@ -73,15 +73,27 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential libssl-dev libsystemd-dev libzstd-dev pkg-config
 
       - name: Make Valkey
+        id: make
         env:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
 
           echo "Building for version: $VERSION"
+
+          ZSTD_FLAG=""
+          if [[ "$VERSION" == "unstable" ]]; then
+            ZSTD_FLAG="BUILD_ZSTD=yes"
+          else
+            IFS=. read -r MAJOR MINOR _ <<<"$VERSION"
+            if (( major > 9 || (major == 9 && minor >= 2) )); then
+              ZSTD_FLAG="BUILD_ZSTD=yes"
+            fi
+          fi
+          echo "zstd=${ZSTD_FLAG:+yes}" >> "$GITHUB_OUTPUT"
 
           if [[ "$VERSION" != "unstable" ]]; then
             MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
@@ -90,12 +102,25 @@ jobs:
               make -C src all BUILD_TLS=yes USE_SYSTEMD=yes
             else
               echo "Version $MAJOR_MINOR is 8.1 or higher - enabling USE_FAST_FLOAT"
-              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+              make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes $ZSTD_FLAG
             fi
           else
             echo "Unstable version detected - enabling USE_FAST_FLOAT"
-            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes
+            make -C src all BUILD_TLS=yes USE_SYSTEMD=yes USE_FAST_FLOAT=yes $ZSTD_FLAG
           fi
+
+      - name: Verify Zstandard support
+        if: steps.make.outputs.zstd == 'yes'
+        run: |
+          set -euo pipefail
+          sock="$RUNNER_TEMP/valkey-zstd.sock"
+          src/valkey-server --port 0 --unixsocket "$sock" --save '' \
+            --rdbcompression zstd --dir "$RUNNER_TEMP" --daemonize yes
+          for _ in $(seq 50); do [[ -S "$sock" ]] && break; sleep 0.1; done
+          src/valkey-cli -s "$sock" set k "$(head -c 100000 /dev/zero | tr '\0' a)"
+          src/valkey-cli -s "$sock" save
+          test "$(src/valkey-cli -s "$sock" config get rdbcompression | tail -1)" = zstd
+          src/valkey-cli -s "$sock" shutdown nosave || true
 
       - name: Create Tarball and SHA256sums
         env:
