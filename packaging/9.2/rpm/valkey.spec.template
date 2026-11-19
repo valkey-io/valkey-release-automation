@@ -377,10 +377,11 @@ install -Dm0644 src/%{name}module.h %{buildroot}%{_includedir}/%{name}module.h
 install -Dm0644 %{SOURCE9} %{buildroot}%{_rpmmacrodir}/macros.%{name}
 
 install -Dm0640 valkey.conf %{buildroot}%{_conf_dir}/includes/valkey.defaults.conf
-install -Dm0640 sentinel.conf %{buildroot}%{_conf_dir}/includes/sentinel.defaults.conf
 # Install default instance configuration files
 install -Dm0640 valkey.default.conf %{buildroot}%{_conf_dir}/default.conf
-install -Dm0660 sentinel.default.conf %{buildroot}%{_conf_dir}/sentinel-default.conf
+# Sentinel rewrites its whole config when it saves state, so it gets one
+# self-contained file: an include would end up defining its primaries twice.
+install -Dm0660 sentinel.conf %{buildroot}%{_conf_dir}/sentinel-default.conf
 
 # Install system configuration
 %if 0%{?is_suse}
@@ -556,7 +557,6 @@ EOF
 %dir %attr(2770,%{name},%{name}) %{_conf_dir}
 %dir %{_conf_dir}/includes
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/valkey.defaults.conf
-%config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/sentinel.defaults.conf
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/default.conf
 %config(noreplace) %attr(0660,root,%{name}) %{_conf_dir}/sentinel-default.conf
 

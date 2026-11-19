@@ -481,9 +481,9 @@ The spec file adapts to different platforms using RPM conditionals:
 /etc/valkey/
 ├── includes/
 │   ├── valkey.defaults.conf     (shipped defaults)
-│   └── sentinel.defaults.conf
+│   └── sentinel.defaults.conf   (7.2–9.1 only)
 ├── default.conf                 (instance config)
-└── sentinel-default.conf
+└── sentinel-default.conf       (9.2+: self-contained, no include)
 
 /var/lib/valkey/default/         (data directory, 0750, valkey:valkey)
 /var/log/valkey/default/         (log directory, 0750, valkey:valkey)
@@ -829,7 +829,7 @@ This patch modifies `valkey.conf` and `sentinel.conf` for production defaults:
 | `logfile` | `""` | `/var/log/valkey/default.log` |
 | `dir` | `./` | `/var/lib/valkey/default/` |
 
-It also creates two new files: `valkey.default.conf` and `sentinel.default.conf` (instance configs that include the defaults).
+It also creates two new files: `valkey.default.conf` and `sentinel.default.conf` (instance configs that include the defaults). From 9.2, `sentinel.default.conf` is not created and the patched `sentinel.conf` is installed as `sentinel-default.conf`, because Sentinel rewrites its config when saving state and would otherwise define its primaries twice.
 
 ### DEB Patches
 
