@@ -1,0 +1,13 @@
+#!/bin/sh
+# Same account as the RPM sysusers entry: system user/group valkey,
+# home /var/lib/valkey, no login shell.
+addgroup -S valkey 2>/dev/null
+adduser -S -D -H -h /var/lib/valkey -s /sbin/nologin -G valkey \
+	-g "User for valkey key-value store" valkey 2>/dev/null
+# Both commands fail harmlessly when the account already exists; fail the
+# install only if it is still missing (e.g. a UID/GID clash).
+if ! getent passwd valkey >/dev/null; then
+	echo "ERROR: could not create the valkey system user" >&2
+	exit 1
+fi
+exit 0

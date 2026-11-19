@@ -1,0 +1,15 @@
+# Settings for the valkey-sentinel service. Copy to
+# /etc/conf.d/valkey-sentinel.<name> to configure an extra instance.
+
+# Instance configuration file (default: /etc/valkey/sentinel-<instance>.conf).
+#cfgfile="/etc/valkey/sentinel-default.conf"
+
+# Extra arguments for valkey-sentinel.
+#command_args=""
+
+#command_user="valkey:valkey"
+#supervisor="supervise-daemon"
+#respawn_delay=2
+#respawn_max=5
+#respawn_period=60
+#rc_ulimit="-n 10240"

@@ -1,9 +1,14 @@
 #!/bin/bash
-# Sign packages, build RPM/DEB repositories, and upload to S3.
-# Usage: publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_region>
+# Sign packages, build RPM/DEB/APK repositories, and upload to S3.
+# Usage: publish-to-s3.sh <version> <gpg_fingerprint> <artifacts_dir> <s3_bucket> <s3_region> [<apk_key_file>]
 #
 # AWS credentials are expected to be configured via OIDC
 # (aws-actions/configure-aws-credentials) before calling this script.
+#
+# <apk_key_file> is the APK repository private key (PEM). It is required
+# once APK publishing is enabled by committing the matching public key as
+# packaging/common/apk/keys/valkey-packages.rsa.pub. APK signing runs in
+# Docker containers of each Alpine release.
 set -euo pipefail
 
 VERSION="$1"
@@ -11,6 +16,13 @@ GPG_KEY="$2"
 ARTIFACTS_DIR="$3"
 S3_BUCKET="$4"
 S3_REGION="$5"
+APK_KEY_FILE="${6:-}"
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+APK_KEY_NAME="valkey-packages.rsa.pub"
+APK_PUBLIC_KEY="${REPO_ROOT}/packaging/common/apk/keys/${APK_KEY_NAME}"
+PLATFORMS="${REPO_ROOT}/.github/package-platforms.json"
 
 MAJOR="${VERSION%%.*}"
 MINOR_PART="${VERSION#*.}"
@@ -151,6 +163,135 @@ for dir in "${ARTIFACTS_DIR}"/valkey-debs-*/; do
   echo "  Done: $(ls *.deb 2>/dev/null | wc -l) DEBs"
   cd - > /dev/null
 done
+
+################################################################################
+# Build APK repositories
+################################################################################
+# Public key in one normalized form, or nothing if the file is not a key.
+public_key_of() { # <-in|-pubin -in> <file>
+  openssl rsa "$@" -pubout 2>/dev/null | grep -v '^-----' | tr -d '\n'
+}
+
+# Each Alpine release gets an image with abuild and python3 installed in a
+# run without the key; every signing step then runs without network.
+declare -A APK_SIGN_IMAGES=()
+prepare_apk_sign_image() { # <container>; sets SIGN_IMAGE
+  local container="$1" prep="valkey-apk-sign-prep-$$"
+  if [ -z "${APK_SIGN_IMAGES[$container]:-}" ]; then
+    SIGN_IMAGE="valkey-apk-sign:${container#*:}"
+    if ! docker run --name "$prep" "$container" apk add --no-cache abuild python3; then
+      docker rm -f "$prep" >/dev/null 2>&1 || true
+      echo "ERROR: could not prepare the APK signing image for ${container}" >&2
+      exit 1
+    fi
+    docker commit "$prep" "$SIGN_IMAGE" >/dev/null
+    docker rm "$prep" >/dev/null
+    APK_SIGN_IMAGES[$container]="$SIGN_IMAGE"
+  fi
+  SIGN_IMAGE="${APK_SIGN_IMAGES[$container]}"
+}
+
+# sign-apk.sh steps run as this user, without network or capabilities.
+# Keyless steps parse the packages; the keyed step sees only the scratch
+# directory of files to sign, never the repository that is uploaded.
+APK_DOCKER=(docker run --rm --network none --user "$(id -u):$(id -g)"
+  --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp
+  -v "${SCRIPT_DIR}/sign-apk.sh:/sign-apk.sh:ro")
+apk_keyless() { # <repo> <work> <sign-apk.sh args>...
+  local repo="$1" work="$2"
+  shift 2
+  "${APK_DOCKER[@]}" -v "${repo}:/repo" -v "${work}:/work" \
+    -v "${APK_PUBLIC_KEY}:/apk-key/${APK_KEY_NAME}:ro" \
+    "$SIGN_IMAGE" sh /sign-apk.sh "$@"
+}
+apk_keyed() { # <work> <file>...
+  local work="$1"
+  shift
+  "${APK_DOCKER[@]}" -v "${work}:/work" -v "${APK_KEY_FILE}:/apk-key/private.rsa:ro" \
+    "$SIGN_IMAGE" sh /sign-apk.sh sign /work "$APK_KEY_NAME" "$@"
+}
+
+APK_DIRS=()
+for dir in "${ARTIFACTS_DIR}"/valkey-apks-*/; do
+  [ -d "$dir" ] && APK_DIRS+=("$dir")
+done
+
+if [ "${#APK_DIRS[@]}" -eq 0 ]; then
+  echo "No APK artifacts to publish."
+elif [ ! -f "$APK_PUBLIC_KEY" ]; then
+  # The committed public key is the switch: users trust it, so publishing
+  # starts only once it is reviewed into the repository.
+  echo "::warning::APK publishing is not enabled: ${APK_PUBLIC_KEY#"${REPO_ROOT}/"} is not committed. Skipping ${#APK_DIRS[@]} APK artifact(s)."
+else
+  if [ -z "$APK_KEY_FILE" ] || [ ! -s "$APK_KEY_FILE" ]; then
+    echo "ERROR: APK publishing is enabled but no APK signing key was provided (APK_PRIVATE_KEY secret)." >&2
+    exit 1
+  fi
+  APK_KEY_FILE="$(cd "$(dirname "$APK_KEY_FILE")" && pwd)/$(basename "$APK_KEY_FILE")"
+  # A wrong secret must fail here, not ship packages users cannot verify.
+  secret_public="$(public_key_of -in "$APK_KEY_FILE")"
+  committed_public="$(public_key_of -pubin -in "$APK_PUBLIC_KEY")"
+  if [ -z "$secret_public" ] || [ -z "$committed_public" ] || [ "$secret_public" != "$committed_public" ]; then
+    echo "ERROR: the APK signing key does not match ${APK_PUBLIC_KEY#"${REPO_ROOT}/"}." >&2
+    exit 1
+  fi
+  # Alpine spells x.y.z-rcN as x.y.z_rcN.
+  APK_VERSION="${VERSION/-rc/_rc}"
+
+  for dir in "${APK_DIRS[@]}"; do
+    artifact=$(basename "$dir" | sed 's/valkey-apks-//')
+    arch="${artifact##*-}"
+    platform="${artifact%-*}"
+    if ! jq -e --arg arch "$arch" '.apk.arch | index($arch)' "$PLATFORMS" >/dev/null ||
+       ! branch=$(jq -er --arg id "$platform" '.apk.platform[] | select(.id == $id) | .branch' "$PLATFORMS") ||
+       ! container=$(jq -er --arg id "$platform" '.apk.platform[] | select(.id == $id) | .container' "$PLATFORMS"); then
+      echo "ERROR: APK artifact ${artifact} does not match an APK platform and arch in ${PLATFORMS}" >&2
+      exit 1
+    fi
+    dest="${STAGING}/${REPO_NAME}/apk/${branch}/${arch}"
+
+    echo "=== APK repo: ${REPO_NAME}/apk/${branch}/${arch} ==="
+    mkdir -p "$dest"
+    dest="$(cd "$dest" && pwd)"
+
+    # Hydrate existing packages before regenerating APKINDEX, for the same
+    # reason as the RPM loop above: apk only sees what the index lists.
+    aws s3 sync "s3://${S3_BUCKET}/packaging/${REPO_NAME}/apk/${branch}/${arch}/" "$dest/" \
+      --exclude "*" --include "*.apk" --region "$S3_REGION"
+
+    new_pkgs=()
+    for src_file in "$dir"/*.apk; do
+      [ -f "$src_file" ] || continue
+      cp "$src_file" "$dest/"
+      new_pkgs+=("$(basename "$src_file")")
+    done
+    if [ "${#new_pkgs[@]}" -eq 0 ]; then
+      echo "ERROR: APK artifact ${artifact} contains no packages" >&2
+      exit 1
+    fi
+
+    # Re-sign only this run's packages (the build signed them with a
+    # throwaway key); hydrated ones carry the release signature already.
+    prepare_apk_sign_image "$container"
+    work="$(mktemp -d)"
+    apk_keyless "$dest" "$work" prepare /repo /work "$arch" "$APK_VERSION" "${new_pkgs[@]}"
+    controls=()
+    for pkg in "${new_pkgs[@]}"; do
+      controls+=("${pkg}/control.tar.gz")
+    done
+    apk_keyed "$work" "${controls[@]}"
+    apk_keyless "$dest" "$work" assemble /repo /work "${new_pkgs[@]}"
+    apk_keyless "$dest" "$work" index /repo /work "$arch" "$APK_KEY_NAME" \
+      "valkey ${MAJOR}.${MINOR} (Alpine ${branch})"
+    apk_keyed "$work" APKINDEX.tar.gz
+    mv "${work}/APKINDEX.tar.gz" "${dest}/APKINDEX.tar.gz"
+    rm -rf "$work"
+
+    echo "  Done: $(find "$dest" -maxdepth 1 -name '*.apk' | wc -l) APKs"
+  done
+
+  cp "$APK_PUBLIC_KEY" "${STAGING}/${APK_KEY_NAME}"
+fi
 
 ################################################################################
 # Export GPG public key
