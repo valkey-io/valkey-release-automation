@@ -20,17 +20,6 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
         build = yaml.safe_load(workflow("build-release.yml"))
         script = build["jobs"]["process-inputs"]["steps"][0]["run"]
-        component_names = (
-            "ARCHIVES",
-            "HASHES",
-            "PACKAGES",
-            "CONTAINER",
-            "DOCS",
-            "HELM",
-            "TRY_VALKEY",
-            "WEBSITE",
-            "BUNDLE",
-        )
         env = os.environ.copy()
         env.update(
             {
@@ -40,15 +29,14 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                 "PAYLOAD_VERSION": "9.2.0",
                 "PAYLOAD_ENVIRONMENT": "dev",
                 "PAYLOAD_SOURCE_SHA": "",
+                "PAYLOAD_RELEASE_COMPONENT": "",
                 "INPUT_VERSION": "",
                 "INPUT_ENVIRONMENT": "",
                 "INPUT_SOURCE_SHA": "",
+                "INPUT_RELEASE_COMPONENT": "",
                 "WORKFLOW_REF": "refs/heads/main",
             }
         )
-        for name in component_names:
-            env[f"PAYLOAD_RUN_{name}"] = ""
-            env[f"INPUT_RUN_{name}"] = ""
         env.update(overrides)
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -140,7 +128,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             archives,
         )
 
-    def test_release_components_default_on_and_gate_their_jobs(self) -> None:
+    def test_release_component_choice_gates_each_job(self) -> None:
         text = workflow("build-release.yml")
         components = {
             "run_archives": (
@@ -161,18 +149,30 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         inputs = yaml.load(text, Loader=yaml.BaseLoader)["on"]["workflow_dispatch"][
             "inputs"
         ]
+        release_component = inputs["release_component"]
+        self.assertEqual(release_component["type"], "choice")
+        self.assertEqual(release_component["default"], "all")
+        self.assertEqual(
+            release_component["options"],
+            [
+                "all",
+                "archives",
+                "hashes",
+                "packages",
+                "container",
+                "docs",
+                "helm",
+                "try-valkey",
+                "website",
+                "bundle",
+            ],
+        )
+        self.assertIn(
+            "github.event.client_payload.release_component",
+            text,
+        )
 
         for component, gated_jobs in components.items():
-            self.assertEqual(inputs[component]["type"], "boolean")
-            self.assertEqual(inputs[component]["default"], "true")
-            self.assertIn(
-                f"github.event.client_payload.components.{component}",
-                text,
-            )
-            self.assertNotIn(
-                f"github.event.client_payload.{component} }}",
-                text,
-            )
             self.assertIn(
                 f"echo \"{component}=${{{component.upper()}}}\"",
                 text,
@@ -205,14 +205,8 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         for component in component_outputs:
             self.assertEqual(legacy_outputs[component], "true", component)
 
-        tarball_env = {
-            f"PAYLOAD_{component.upper()}": (
-                "true" if component == "run_archives" else "false"
-            )
-            for component in component_outputs
-        }
         tarball_result, tarball_outputs = self.run_build_release_inputs(
-            **tarball_env
+            PAYLOAD_RELEASE_COMPONENT="archives"
         )
         self.assertEqual(
             tarball_result.returncode,
@@ -225,30 +219,38 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
 
     def test_release_components_expand_their_dependency_trees(self) -> None:
         dependencies = {
-            "run_archives": {"run_archives"},
-            "run_hashes": {"run_hashes"},
-            "run_packages": {"run_packages"},
-            "run_container": {"run_container", "run_hashes"},
-            "run_docs": {"run_docs", "run_hashes"},
-            "run_helm": {"run_helm", "run_container", "run_hashes"},
-            "run_try_valkey": {"run_try_valkey", "run_hashes"},
-            "run_website": {
+            "archives": {"run_archives"},
+            "hashes": {"run_hashes"},
+            "packages": {"run_packages"},
+            "container": {"run_container", "run_hashes"},
+            "docs": {"run_docs", "run_hashes"},
+            "helm": {"run_helm", "run_container", "run_hashes"},
+            "try-valkey": {"run_try_valkey", "run_hashes"},
+            "website": {
                 "run_website",
                 "run_container",
                 "run_hashes",
                 "run_try_valkey",
             },
-            "run_bundle": {"run_bundle", "run_container", "run_hashes"},
+            "bundle": {"run_bundle", "run_container", "run_hashes"},
         }
-        all_false = {
-            f"PAYLOAD_{component.upper()}": "false" for component in dependencies
+        component_outputs = {
+            "run_archives",
+            "run_hashes",
+            "run_packages",
+            "run_container",
+            "run_docs",
+            "run_helm",
+            "run_try_valkey",
+            "run_website",
+            "run_bundle",
         }
 
         for selected, expected in dependencies.items():
             with self.subTest(selected=selected):
-                component_env = dict(all_false)
-                component_env[f"PAYLOAD_{selected.upper()}"] = "true"
-                result, outputs = self.run_build_release_inputs(**component_env)
+                result, outputs = self.run_build_release_inputs(
+                    PAYLOAD_RELEASE_COMPONENT=selected
+                )
                 self.assertEqual(
                     result.returncode,
                     0,
@@ -256,7 +258,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                 )
                 enabled = {
                     component
-                    for component in dependencies
+                    for component in component_outputs
                     if outputs[component] == "true"
                 }
                 self.assertEqual(enabled, expected)

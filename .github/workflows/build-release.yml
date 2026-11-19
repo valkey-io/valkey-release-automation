@@ -37,51 +37,22 @@ on:
         description: "Exact Valkey commit (full lowercase 40-hex); optional, but must match the prod tag when supplied"
         required: false
         default: ''
-      run_archives:
-        type: boolean
-        description: Build and publish x86 and ARM tarballs
+      release_component:
+        type: choice
+        description: Release output to run; dependencies are included automatically
         required: false
-        default: true
-      run_hashes:
-        type: boolean
-        description: Update the Valkey hashes repository
-        required: false
-        default: true
-      run_packages:
-        type: boolean
-        description: Build and publish distribution packages
-        required: false
-        default: true
-      run_container:
-        type: boolean
-        description: Update the Valkey container repository (also runs hashes)
-        required: false
-        default: true
-      run_docs:
-        type: boolean
-        description: Update the Valkey documentation repository (also runs hashes)
-        required: false
-        default: true
-      run_helm:
-        type: boolean
-        description: Update the Helm chart (also runs container and hashes)
-        required: false
-        default: true
-      run_try_valkey:
-        type: boolean
-        description: Update Try Valkey (also runs hashes)
-        required: false
-        default: true
-      run_website:
-        type: boolean
-        description: Update the website (also runs container, hashes, and Try Valkey)
-        required: false
-        default: true
-      run_bundle:
-        type: boolean
-        description: Trigger Bundle (also runs container and hashes)
-        required: false
-        default: true
+        default: all
+        options:
+          - all
+          - archives
+          - hashes
+          - packages
+          - container
+          - docs
+          - helm
+          - try-valkey
+          - website
+          - bundle
 
 # Least privilege by default. id-token: write is granted only on the
 # specific jobs that assume the AWS role via OIDC (the package build calls
@@ -125,29 +96,11 @@ jobs:
           PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
           PAYLOAD_ENVIRONMENT: ${{ github.event.client_payload.environment }}
           PAYLOAD_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          # Keep the component controls under one top-level client_payload
-          # property so repository_dispatch stays below its property limit.
-          PAYLOAD_RUN_ARCHIVES: ${{ github.event.client_payload.components.run_archives }}
-          PAYLOAD_RUN_HASHES: ${{ github.event.client_payload.components.run_hashes }}
-          PAYLOAD_RUN_PACKAGES: ${{ github.event.client_payload.components.run_packages }}
-          PAYLOAD_RUN_CONTAINER: ${{ github.event.client_payload.components.run_container }}
-          PAYLOAD_RUN_DOCS: ${{ github.event.client_payload.components.run_docs }}
-          PAYLOAD_RUN_HELM: ${{ github.event.client_payload.components.run_helm }}
-          PAYLOAD_RUN_TRY_VALKEY: ${{ github.event.client_payload.components.run_try_valkey }}
-          PAYLOAD_RUN_WEBSITE: ${{ github.event.client_payload.components.run_website }}
-          PAYLOAD_RUN_BUNDLE: ${{ github.event.client_payload.components.run_bundle }}
+          PAYLOAD_RELEASE_COMPONENT: ${{ github.event.client_payload.release_component }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
           INPUT_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
-          INPUT_RUN_ARCHIVES: ${{ github.event.inputs.run_archives }}
-          INPUT_RUN_HASHES: ${{ github.event.inputs.run_hashes }}
-          INPUT_RUN_PACKAGES: ${{ github.event.inputs.run_packages }}
-          INPUT_RUN_CONTAINER: ${{ github.event.inputs.run_container }}
-          INPUT_RUN_DOCS: ${{ github.event.inputs.run_docs }}
-          INPUT_RUN_HELM: ${{ github.event.inputs.run_helm }}
-          INPUT_RUN_TRY_VALKEY: ${{ github.event.inputs.run_try_valkey }}
-          INPUT_RUN_WEBSITE: ${{ github.event.inputs.run_website }}
-          INPUT_RUN_BUNDLE: ${{ github.event.inputs.run_bundle }}
+          INPUT_RELEASE_COMPONENT: ${{ github.event.inputs.release_component }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
@@ -157,58 +110,84 @@ jobs:
             VERSION="${PAYLOAD_VERSION}"
             ENVIRONMENT="${PAYLOAD_ENVIRONMENT}"
             SOURCE_SHA="${PAYLOAD_SOURCE_SHA}"
-            RUN_ARCHIVES="${PAYLOAD_RUN_ARCHIVES}"
-            RUN_HASHES="${PAYLOAD_RUN_HASHES}"
-            RUN_PACKAGES="${PAYLOAD_RUN_PACKAGES}"
-            RUN_CONTAINER="${PAYLOAD_RUN_CONTAINER}"
-            RUN_DOCS="${PAYLOAD_RUN_DOCS}"
-            RUN_HELM="${PAYLOAD_RUN_HELM}"
-            RUN_TRY_VALKEY="${PAYLOAD_RUN_TRY_VALKEY}"
-            RUN_WEBSITE="${PAYLOAD_RUN_WEBSITE}"
-            RUN_BUNDLE="${PAYLOAD_RUN_BUNDLE}"
+            RELEASE_COMPONENT="${PAYLOAD_RELEASE_COMPONENT}"
           elif [[ "${EVENT_NAME}" == "push" ]]; then
             VERSION="unstable"
             ENVIRONMENT="dev"
             SOURCE_SHA=""
-            RUN_ARCHIVES=true
-            RUN_HASHES=true
-            RUN_PACKAGES=true
-            RUN_CONTAINER=true
-            RUN_DOCS=true
-            RUN_HELM=true
-            RUN_TRY_VALKEY=true
-            RUN_WEBSITE=true
-            RUN_BUNDLE=true
+            RELEASE_COMPONENT=all
           else
             VERSION="${INPUT_VERSION}"
             ENVIRONMENT="${INPUT_ENVIRONMENT}"
             SOURCE_SHA="${INPUT_SOURCE_SHA}"
-            RUN_ARCHIVES="${INPUT_RUN_ARCHIVES}"
-            RUN_HASHES="${INPUT_RUN_HASHES}"
-            RUN_PACKAGES="${INPUT_RUN_PACKAGES}"
-            RUN_CONTAINER="${INPUT_RUN_CONTAINER}"
-            RUN_DOCS="${INPUT_RUN_DOCS}"
-            RUN_HELM="${INPUT_RUN_HELM}"
-            RUN_TRY_VALKEY="${INPUT_RUN_TRY_VALKEY}"
-            RUN_WEBSITE="${INPUT_RUN_WEBSITE}"
-            RUN_BUNDLE="${INPUT_RUN_BUNDLE}"
+            RELEASE_COMPONENT="${INPUT_RELEASE_COMPONENT}"
           fi
 
-          # Missing component fields mean true so repository_dispatch callers
-          # that predate these options keep full-release behavior.
-          for component in \
-            RUN_ARCHIVES RUN_HASHES RUN_PACKAGES RUN_CONTAINER RUN_DOCS \
-            RUN_HELM RUN_TRY_VALKEY RUN_WEBSITE RUN_BUNDLE
-          do
-            value="${!component:-}"
-            if [[ -z "$value" ]]; then
-              value=true
-            elif [[ "$value" != "true" && "$value" != "false" ]]; then
-              echo "Invalid $component value '$value'. Allowed values: 'true', 'false'."
+          # Missing means "all" so existing repository_dispatch callers keep
+          # the original full-release behavior.
+          if [[ -z "$RELEASE_COMPONENT" ]]; then
+            RELEASE_COMPONENT=all
+          fi
+
+          RUN_ARCHIVES=false
+          RUN_HASHES=false
+          RUN_PACKAGES=false
+          RUN_CONTAINER=false
+          RUN_DOCS=false
+          RUN_HELM=false
+          RUN_TRY_VALKEY=false
+          RUN_WEBSITE=false
+          RUN_BUNDLE=false
+
+          # This is the single dependency map for selectable release outputs.
+          case "$RELEASE_COMPONENT" in
+            all)
+              RUN_ARCHIVES=true
+              RUN_HASHES=true
+              RUN_PACKAGES=true
+              RUN_CONTAINER=true
+              RUN_DOCS=true
+              RUN_HELM=true
+              RUN_TRY_VALKEY=true
+              RUN_WEBSITE=true
+              RUN_BUNDLE=true
+              ;;
+            archives) RUN_ARCHIVES=true ;;
+            hashes) RUN_HASHES=true ;;
+            packages) RUN_PACKAGES=true ;;
+            container)
+              RUN_HASHES=true
+              RUN_CONTAINER=true
+              ;;
+            docs)
+              RUN_HASHES=true
+              RUN_DOCS=true
+              ;;
+            helm)
+              RUN_HASHES=true
+              RUN_CONTAINER=true
+              RUN_HELM=true
+              ;;
+            try-valkey)
+              RUN_HASHES=true
+              RUN_TRY_VALKEY=true
+              ;;
+            website)
+              RUN_HASHES=true
+              RUN_CONTAINER=true
+              RUN_TRY_VALKEY=true
+              RUN_WEBSITE=true
+              ;;
+            bundle)
+              RUN_HASHES=true
+              RUN_CONTAINER=true
+              RUN_BUNDLE=true
+              ;;
+            *)
+              echo "Invalid release_component '$RELEASE_COMPONENT'."
               exit 1
-            fi
-            printf -v "$component" '%s' "$value"
-          done
+              ;;
+          esac
 
           # Validate version FIRST, before any other use of the value.
           if [[ ! "${VERSION}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
@@ -234,22 +213,6 @@ jobs:
           if [[ "${ENVIRONMENT}" != "dev" && "${ENVIRONMENT}" != "prod" ]]; then
             echo "Invalid environment. Allowed values: 'dev', 'prod'."
             exit 1
-          fi
-
-          # Expand selected components to their existing workflow dependency
-          # tree. Callers choose desired outputs; prerequisites are automatic.
-          if [[ "$RUN_WEBSITE" == "true" ]]; then
-            RUN_CONTAINER=true
-            RUN_HASHES=true
-            RUN_TRY_VALKEY=true
-          fi
-          if [[ "$RUN_HELM" == "true" || "$RUN_BUNDLE" == "true" ]]; then
-            RUN_CONTAINER=true
-          fi
-          if [[ "$RUN_CONTAINER" == "true" ||
-                "$RUN_DOCS" == "true" ||
-                "$RUN_TRY_VALKEY" == "true" ]]; then
-            RUN_HASHES=true
           fi
 
           if [[ "${ENVIRONMENT}" == "prod" ]]; then
