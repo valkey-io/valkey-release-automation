@@ -434,6 +434,11 @@ test_user_group() {
     fi
 }
 
+# True when the packages under test are Valkey 9.2 or later.
+is_9_2_or_later() {
+    [[ "$(printf '%s\n' 9.2 "$EXPECTED_VERSION" | sort -V | head -1)" == "9.2" ]]
+}
+
 test_directories() {
     section_header "Test: Directories & Permissions"
 
@@ -454,10 +459,11 @@ test_directories() {
     if [[ "$OS_FAMILY" == "deb" ]]; then
         assert_owner /etc/valkey "valkey:valkey"
         assert_perms /etc/valkey 2770
-    elif [[ "$(printf '%s\n' 9.2 "$EXPECTED_VERSION" | sort -V | head -1)" == "9.2" ]]; then
-        # 9.2+ Sentinel must be able to create temp files in its config dir.
-        assert_owner /etc/valkey "valkey:valkey"
-        assert_perms /etc/valkey 2770
+    elif is_9_2_or_later; then
+        # Sentinel must be able to create temp files in its config dir; the
+        # sticky bit keeps root-owned configs there from being replaced.
+        assert_owner /etc/valkey "root:valkey"
+        assert_perms /etc/valkey 1770
     else
         assert_owner /etc/valkey "root:root"
         assert_perms /etc/valkey 755
@@ -481,8 +487,14 @@ test_config_files() {
         assert_perms /etc/valkey/default.conf 640 "default.conf"
 
         assert_file_exists /etc/valkey/sentinel-default.conf "sentinel-default.conf"
-        assert_owner /etc/valkey/sentinel-default.conf "root:valkey" "sentinel-default.conf"
-        assert_perms /etc/valkey/sentinel-default.conf 660 "sentinel-default.conf"
+        if is_9_2_or_later; then
+            # Sentinel replaces this file when it saves state, so it owns it.
+            assert_owner /etc/valkey/sentinel-default.conf "valkey:valkey" "sentinel-default.conf"
+            assert_perms /etc/valkey/sentinel-default.conf 640 "sentinel-default.conf"
+        else
+            assert_owner /etc/valkey/sentinel-default.conf "root:valkey" "sentinel-default.conf"
+            assert_perms /etc/valkey/sentinel-default.conf 660 "sentinel-default.conf"
+        fi
     fi
 }
 
@@ -1014,6 +1026,28 @@ test_valkey_sentinel_service() {
         pass "valkey-cli -p 26379 PING → PONG"
     else
         fail "valkey-cli -p 26379 PING → PONG (got: $ping_result)"
+    fi
+
+    # Sentinel saves its ID to its config on first start. If it cannot save,
+    # it picks a new ID on every restart and loses its failover state too.
+    if is_9_2_or_later; then
+        local sentinel_id new_id="" i
+        sentinel_id="$(valkey-cli --raw -p 26379 SENTINEL MYID 2>/dev/null)" || true
+        if [[ "$sentinel_id" =~ ^[0-9a-f]{40}$ ]] &&
+            systemctl restart "$service_name" 2>&1 &&
+            wait_for_service "$service_name" 15; then
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+                new_id="$(valkey-cli --raw -p 26379 SENTINEL MYID 2>/dev/null)" || true
+                [[ -n "$new_id" ]] && break
+                sleep 0.5
+            done
+        fi
+        if [[ "$sentinel_id" =~ ^[0-9a-f]{40}$ && "$new_id" == "$sentinel_id" ]]; then
+            pass "Sentinel ID survives a service restart"
+        else
+            fail "Sentinel ID survives a service restart (before: ${sentinel_id:-none}, after: ${new_id:-none})"
+            journalctl -u "$service_name" --no-pager -n 20 2>&1 || true
+        fi
     fi
 
     # Stop sentinel

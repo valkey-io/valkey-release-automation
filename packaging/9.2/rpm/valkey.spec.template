@@ -381,7 +381,7 @@ install -Dm0640 valkey.conf %{buildroot}%{_conf_dir}/includes/valkey.defaults.co
 install -Dm0640 valkey.default.conf %{buildroot}%{_conf_dir}/default.conf
 # Sentinel rewrites its whole config when it saves state, so it gets one
 # self-contained file: an include would end up defining its primaries twice.
-install -Dm0660 sentinel.conf %{buildroot}%{_conf_dir}/sentinel-default.conf
+install -Dm0640 sentinel.conf %{buildroot}%{_conf_dir}/sentinel-default.conf
 
 # Install system configuration
 %if 0%{?is_suse}
@@ -553,12 +553,14 @@ EOF
 %dir %{valkey_modules_dir}
 
 # Sentinel saves state by writing a temp file next to its config and
-# renaming it over the config, and refuses to start if it cannot.
-%dir %attr(2770,%{name},%{name}) %{_conf_dir}
+# renaming it over the config, and refuses to start if it cannot. The
+# sticky bit lets the valkey group do that while only letting it replace
+# files it owns, so root-owned configs such as default.conf stay protected.
+%dir %attr(1770,root,%{name}) %{_conf_dir}
 %dir %{_conf_dir}/includes
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/includes/valkey.defaults.conf
 %config(noreplace) %attr(0640,root,%{name}) %{_conf_dir}/default.conf
-%config(noreplace) %attr(0660,root,%{name}) %{_conf_dir}/sentinel-default.conf
+%config(noreplace) %attr(0640,%{name},%{name}) %{_conf_dir}/sentinel-default.conf
 
 %dir %attr(0750,%{name},%{name}) %{_data_dir}
 %dir %attr(0750,%{name},%{name}) %{_data_dir}/default
