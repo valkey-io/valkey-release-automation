@@ -487,6 +487,8 @@ test_config_files() {
         assert_perms /etc/valkey/default.conf 640 "default.conf"
 
         assert_file_exists /etc/valkey/sentinel-default.conf "sentinel-default.conf"
+        # Sentinel configs from older packages include this file.
+        assert_file_exists /etc/valkey/includes/sentinel.defaults.conf "includes/sentinel.defaults.conf"
         if is_9_2_or_later; then
             # Sentinel replaces this file when it saves state, so it owns it.
             assert_owner /etc/valkey/sentinel-default.conf "valkey:valkey" "sentinel-default.conf"

@@ -481,7 +481,7 @@ The spec file adapts to different platforms using RPM conditionals:
 /etc/valkey/
 ├── includes/
 │   ├── valkey.defaults.conf     (shipped defaults)
-│   └── sentinel.defaults.conf   (7.2–9.1 only)
+│   └── sentinel.defaults.conf   (9.2+: kept only for configs that include it)
 ├── default.conf                 (instance config)
 └── sentinel-default.conf       (9.2+: self-contained, no include, valkey-owned)
 
