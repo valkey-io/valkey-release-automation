@@ -78,14 +78,3 @@ Index: valkey-9.2.0/valkey.default.conf
 +pidfile /run/valkey/default.pid
 +logfile /var/log/valkey/default.log
 +
-Index: valkey-9.2.0/sentinel.default.conf
-===================================================================
---- /dev/null
-+++ valkey-9.2.0/sentinel.default.conf
-@@ -0,0 +1,6 @@
-+include /etc/valkey/includes/sentinel.defaults.conf
-+
-+port 26379
-+pidfile /run/valkey/sentinel-default.pid
-+logfile /var/log/valkey/sentinel-default.log
-+

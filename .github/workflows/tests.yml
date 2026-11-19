@@ -33,3 +33,4 @@ jobs:
           python -m unittest -v
           tests.test_update_helm_chart
           tests.test_release_workflows
+          tests.test_automate_website_description
