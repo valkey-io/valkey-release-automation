@@ -21,6 +21,13 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         build = yaml.safe_load(workflow("build-release.yml"))
         script = build["jobs"]["process-inputs"]["steps"][0]["run"]
         env = os.environ.copy()
+        payload = {
+            "version": "9.2.0",
+            "environment": "dev",
+            "source_sha": "",
+        }
+        if "PAYLOAD_RELEASE_COMPONENTS" in overrides:
+            payload["release_components"] = overrides["PAYLOAD_RELEASE_COMPONENTS"]
         env.update(
             {
                 "GH_TOKEN": "",
@@ -30,6 +37,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                 "PAYLOAD_ENVIRONMENT": "dev",
                 "PAYLOAD_SOURCE_SHA": "",
                 "PAYLOAD_RELEASE_COMPONENTS": "",
+                "PAYLOAD_JSON": json.dumps(payload),
                 "INPUT_VERSION": "",
                 "INPUT_ENVIRONMENT": "",
                 "INPUT_SOURCE_SHA": "",
@@ -219,7 +227,6 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                 "run_website",
                 "run_container",
                 "run_hashes",
-                "run_try_valkey",
             },
             "bundle": {"run_bundle", "run_container", "run_hashes"},
         }
@@ -251,6 +258,17 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
                     if outputs[component] == "true"
                 }
                 self.assertEqual(enabled, expected)
+
+    def test_explicit_empty_dispatch_does_not_select_every_component(self) -> None:
+        result, outputs = self.run_build_release_inputs(
+            PAYLOAD_RELEASE_COMPONENTS=""
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(outputs, {})
+        self.assertIn(
+            "release_components must contain at least one component.",
+            result.stdout + result.stderr,
+        )
 
     def test_release_component_list_supports_multiple_outputs(self) -> None:
         result, outputs = self.run_build_release_inputs(

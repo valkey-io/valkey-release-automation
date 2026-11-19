@@ -86,6 +86,7 @@ jobs:
           PAYLOAD_ENVIRONMENT: ${{ github.event.client_payload.environment }}
           PAYLOAD_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
           PAYLOAD_RELEASE_COMPONENTS: ${{ github.event.client_payload.release_components }}
+          PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
           INPUT_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
@@ -102,8 +103,9 @@ jobs:
             ENVIRONMENT="${PAYLOAD_ENVIRONMENT}"
             SOURCE_SHA="${PAYLOAD_SOURCE_SHA}"
             RELEASE_COMPONENTS="${PAYLOAD_RELEASE_COMPONENTS}"
-            # Existing callers do not send this new field.
-            if [[ -z "$RELEASE_COMPONENTS" ]]; then
+            # Existing callers do not send this new field. An explicitly
+            # present empty field is rejected by the validation below.
+            if ! jq -e 'has("release_components")' <<< "$PAYLOAD_JSON" >/dev/null; then
               RELEASE_COMPONENTS="$ALL_COMPONENTS"
             fi
           elif [[ "${EVENT_NAME}" == "push" ]]; then
@@ -161,7 +163,6 @@ jobs:
               website)
                 RUN_HASHES=true
                 RUN_CONTAINER=true
-                RUN_TRY_VALKEY=true
                 RUN_WEBSITE=true
                 ;;
               bundle)
