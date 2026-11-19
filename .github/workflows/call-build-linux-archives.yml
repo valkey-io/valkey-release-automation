@@ -89,7 +89,7 @@ jobs:
             ZSTD_FLAG="BUILD_ZSTD=yes"
           else
             IFS=. read -r MAJOR MINOR _ <<<"$VERSION"
-            if (( MAJOR * 100 + MINOR >= 902 )); then
+            if (( major > 9 || (major == 9 && minor >= 2) )); then
               ZSTD_FLAG="BUILD_ZSTD=yes"
             fi
           fi
