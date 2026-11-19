@@ -166,6 +166,14 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertEqual(inputs[component]["type"], "boolean")
             self.assertEqual(inputs[component]["default"], "true")
             self.assertIn(
+                f"github.event.client_payload.components.{component}",
+                text,
+            )
+            self.assertNotIn(
+                f"github.event.client_payload.{component} }}",
+                text,
+            )
+            self.assertIn(
                 f"echo \"{component}=${{{component.upper()}}}\"",
                 text,
             )

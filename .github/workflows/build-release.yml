@@ -125,15 +125,17 @@ jobs:
           PAYLOAD_VERSION: ${{ github.event.client_payload.version }}
           PAYLOAD_ENVIRONMENT: ${{ github.event.client_payload.environment }}
           PAYLOAD_SOURCE_SHA: ${{ github.event.client_payload.source_sha }}
-          PAYLOAD_RUN_ARCHIVES: ${{ github.event.client_payload.run_archives }}
-          PAYLOAD_RUN_HASHES: ${{ github.event.client_payload.run_hashes }}
-          PAYLOAD_RUN_PACKAGES: ${{ github.event.client_payload.run_packages }}
-          PAYLOAD_RUN_CONTAINER: ${{ github.event.client_payload.run_container }}
-          PAYLOAD_RUN_DOCS: ${{ github.event.client_payload.run_docs }}
-          PAYLOAD_RUN_HELM: ${{ github.event.client_payload.run_helm }}
-          PAYLOAD_RUN_TRY_VALKEY: ${{ github.event.client_payload.run_try_valkey }}
-          PAYLOAD_RUN_WEBSITE: ${{ github.event.client_payload.run_website }}
-          PAYLOAD_RUN_BUNDLE: ${{ github.event.client_payload.run_bundle }}
+          # Keep the component controls under one top-level client_payload
+          # property so repository_dispatch stays below its property limit.
+          PAYLOAD_RUN_ARCHIVES: ${{ github.event.client_payload.components.run_archives }}
+          PAYLOAD_RUN_HASHES: ${{ github.event.client_payload.components.run_hashes }}
+          PAYLOAD_RUN_PACKAGES: ${{ github.event.client_payload.components.run_packages }}
+          PAYLOAD_RUN_CONTAINER: ${{ github.event.client_payload.components.run_container }}
+          PAYLOAD_RUN_DOCS: ${{ github.event.client_payload.components.run_docs }}
+          PAYLOAD_RUN_HELM: ${{ github.event.client_payload.components.run_helm }}
+          PAYLOAD_RUN_TRY_VALKEY: ${{ github.event.client_payload.components.run_try_valkey }}
+          PAYLOAD_RUN_WEBSITE: ${{ github.event.client_payload.components.run_website }}
+          PAYLOAD_RUN_BUNDLE: ${{ github.event.client_payload.components.run_bundle }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
           INPUT_ENVIRONMENT: ${{ github.event.inputs.environment }}
           INPUT_SOURCE_SHA: ${{ github.event.inputs.source_sha }}
